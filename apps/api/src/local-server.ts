@@ -1,5 +1,4 @@
 import http from 'node:http';
-import { pathToFileURL } from 'node:url';
 import { SignJWT } from 'jose';
 import { createApiApp, type AuthGateway } from './app.js';
 import type { ApiEnv } from './env.js';
@@ -175,15 +174,4 @@ export async function startLocalApiServer(options?: {
         server.close((err) => (err ? reject(err) : resolve()));
       }),
   };
-}
-
-const isEntrypoint =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (isEntrypoint) {
-  void startLocalApiServer({ localDevMode: process.env['LOCAL_DEV_MODE'] !== 'false' }).then(
-    ({ url }) => {
-      console.log(`Financial SaaS local API listening on ${url}`);
-    }
-  );
 }
