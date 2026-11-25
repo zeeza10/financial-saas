@@ -1,7 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
+  BookOpen,
   Building2,
+  CalendarClock,
   CheckCircle2,
+  Landmark,
+  Layers,
   Menu,
   ShieldCheck,
   Users,
@@ -10,14 +14,23 @@ import {
 import {
   ORG_ROLES,
   hasRolePermission,
+  type AccountDto,
   type AuditEventDto,
+  type BankAccountDto,
+  type BankTransactionDto,
+  type JournalEntryDto,
   type MemberDto,
   type OrganizationDto,
   type OrgRole,
+  type PeriodDto,
+  type ReconciliationDto,
+  type TrialBalanceReportDto,
 } from '@financial-saas/contracts';
 import { apiClient, type SessionUser } from './apiClient.js';
+import { LedgerPanel } from './components/LedgerPanel.js';
+import { BankingPanel } from './components/BankingPanel.js';
 
-type ActiveTab = 'overview' | 'members' | 'audit';
+type ActiveTab = 'overview' | 'coa' | 'journals' | 'banking' | 'periods' | 'members' | 'audit';
 
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -39,12 +52,20 @@ export function App() {
   const [baseCurrency, setBaseCurrency] = useState('USD');
   const [country, setCountry] = useState('US');
 
-  // Members & audit
+  // Phase 3 & 4 org data
   const [members, setMembers] = useState<MemberDto[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrgRole>('accountant');
   const [auditEvents, setAuditEvents] = useState<AuditEventDto[]>([]);
   const [chainValid, setChainValid] = useState<boolean | null>(null);
+
+  const [accounts, setAccounts] = useState<AccountDto[]>([]);
+  const [entries, setEntries] = useState<JournalEntryDto[]>([]);
+  const [periods, setPeriods] = useState<PeriodDto[]>([]);
+  const [trialBalance, setTrialBalance] = useState<TrialBalanceReportDto | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccountDto[]>([]);
+  const [bankTxs, setBankTxs] = useState<BankTransactionDto[]>([]);
+  const [reconciliations, setReconciliations] = useState<ReconciliationDto[]>([]);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
 
@@ -78,19 +99,43 @@ export function App() {
     })();
   }, [user, activeOrgId]);
 
+  const refreshActiveOrgData = useCallback(async () => {
+    if (!activeOrg) return;
+    const tasks: Promise<void>[] = [];
+
+    if (hasRolePermission(activeOrg.role, 'accounts:read')) {
+      tasks.push(apiClient.listAccounts(activeOrg.id).then(setAccounts));
+    }
+    if (hasRolePermission(activeOrg.role, 'reports:read')) {
+      tasks.push(apiClient.listJournalEntries(activeOrg.id).then(setEntries));
+      tasks.push(apiClient.listPeriods(activeOrg.id).then(setPeriods));
+      tasks.push(
+        apiClient
+          .getTrialBalance(activeOrg.id, new Date().toISOString().slice(0, 10))
+          .then(setTrialBalance)
+      );
+    }
+    if (hasRolePermission(activeOrg.role, 'banking:read')) {
+      tasks.push(apiClient.listBankAccounts(activeOrg.id).then(setBankAccounts));
+      tasks.push(apiClient.listBankTransactions(activeOrg.id).then(setBankTxs));
+      tasks.push(apiClient.listReconciliations(activeOrg.id).then(setReconciliations));
+    }
+    if (hasRolePermission(activeOrg.role, 'members:read')) {
+      tasks.push(apiClient.listMembers(activeOrg.id).then(setMembers));
+    }
+    if (hasRolePermission(activeOrg.role, 'audit:read')) {
+      tasks.push(apiClient.listAuditEvents(activeOrg.id).then(setAuditEvents));
+    }
+    await Promise.all(tasks);
+  }, [activeOrg]);
+
   useEffect(() => {
     if (!activeOrg) return;
     setError(null);
-    if (tab === 'members' && hasRolePermission(activeOrg.role, 'members:read')) {
-      void apiClient.listMembers(activeOrg.id).then(setMembers).catch((e) => setError(e.message));
-    }
-    if (tab === 'audit' && hasRolePermission(activeOrg.role, 'audit:read')) {
-      void apiClient
-        .listAuditEvents(activeOrg.id)
-        .then(setAuditEvents)
-        .catch((e) => setError(e.message));
-    }
-  }, [activeOrg, tab]);
+    void refreshActiveOrgData().catch((e) =>
+      setError(e instanceof Error ? e.message : 'Unable to load organization data')
+    );
+  }, [activeOrg, tab, refreshActiveOrgData]);
 
   async function handleAuthSubmit(e: FormEvent) {
     e.preventDefault();
@@ -230,6 +275,20 @@ export function App() {
     );
   }
 
+  const navItem = (id: ActiveTab, label: string, Icon: typeof Building2) => (
+    <button
+      type="button"
+      className={`nav-btn ${tab === id ? 'active' : ''}`}
+      onClick={() => {
+        setTab(id);
+        setMobileMenuOpen(false);
+      }}
+    >
+      <Icon size={16} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`} aria-label="Main navigation">
@@ -250,43 +309,19 @@ export function App() {
           )}
         </div>
         <nav className="nav-list">
-          <button
-            type="button"
-            className={`nav-btn ${tab === 'overview' ? 'active' : ''}`}
-            onClick={() => {
-              setTab('overview');
-              setMobileMenuOpen(false);
-            }}
-          >
-            <Building2 size={16} aria-hidden="true" />
-            <span>Organizations</span>
-          </button>
-          {activeOrg && hasRolePermission(activeOrg.role, 'members:read') && (
-            <button
-              type="button"
-              className={`nav-btn ${tab === 'members' ? 'active' : ''}`}
-              onClick={() => {
-                setTab('members');
-                setMobileMenuOpen(false);
-              }}
-            >
-              <Users size={16} aria-hidden="true" />
-              <span>Team & Roles</span>
-            </button>
-          )}
-          {activeOrg && hasRolePermission(activeOrg.role, 'audit:read') && (
-            <button
-              type="button"
-              className={`nav-btn ${tab === 'audit' ? 'active' : ''}`}
-              onClick={() => {
-                setTab('audit');
-                setMobileMenuOpen(false);
-              }}
-            >
-              <CheckCircle2 size={16} aria-hidden="true" />
-              <span>Audit Trail</span>
-            </button>
-          )}
+          {navItem('overview', 'Organizations', Building2)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'accounts:read') &&
+            navItem('coa', 'Chart of Accounts', Layers)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'reports:read') &&
+            navItem('journals', 'Journal & Ledger', BookOpen)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'banking:read') &&
+            navItem('banking', 'Banking & Import', Landmark)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'reports:read') &&
+            navItem('periods', 'Periods & Trial Bal.', CalendarClock)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'members:read') &&
+            navItem('members', 'Team & Roles', Users)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'audit:read') &&
+            navItem('audit', 'Audit Trail', CheckCircle2)}
         </nav>
       </aside>
 
@@ -386,7 +421,7 @@ export function App() {
 
               {activeOrg && (
                 <section className="card">
-                  <h2 style={{ marginTop: 0 }}>{activeOrg.name} — Phase 3 Foundation</h2>
+                  <h2 style={{ marginTop: 0 }}>{activeOrg.name} — Core Financial Engine</h2>
                   <div className="grid-3">
                     <div>
                       <div className="muted">Base Currency</div>
@@ -397,13 +432,39 @@ export function App() {
                       <span className="badge">{activeOrg.role}</span>
                     </div>
                     <div>
-                      <div className="muted">Plan</div>
-                      <span className="badge badge-ok">{activeOrg.plan_code}</span>
+                      <div className="muted">Accounts / Posted Entries</div>
+                      <strong>{accounts.length} accounts · {entries.filter((e) => e.status === 'posted').length} posted</strong>
                     </div>
                   </div>
                 </section>
               )}
             </>
+          )}
+
+          {activeOrg && (tab === 'coa' || tab === 'journals' || tab === 'periods') && (
+            <LedgerPanel
+              org={activeOrg}
+              mode={tab}
+              accounts={accounts}
+              entries={entries}
+              periods={periods}
+              trialBalance={trialBalance}
+              onRefresh={refreshActiveOrgData}
+              onError={setError}
+            />
+          )}
+
+          {activeOrg && tab === 'banking' && (
+            <BankingPanel
+              org={activeOrg}
+              accounts={accounts}
+              bankAccounts={bankAccounts}
+              transactions={bankTxs}
+              entries={entries}
+              reconciliations={reconciliations}
+              onRefresh={refreshActiveOrgData}
+              onError={setError}
+            />
           )}
 
           {tab === 'members' && activeOrg && (

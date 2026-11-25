@@ -1,25 +1,20 @@
 import {
+  ApiDomainError,
   hasRolePermission,
   type AuditEventDto,
+  type AuthUser,
   type CreateOrganizationRequest,
   type InviteMemberRequest,
   type MemberDto,
   type OrganizationDto,
   type OrgRole,
   type Permission,
+  type PlatformContext,
 } from '@financial-saas/contracts';
 import { sha256Hex } from './security.js';
 import type { ApiEnv } from './env.js';
 
-export class ApiDomainError extends Error {
-  constructor(
-    readonly status: number,
-    readonly title: string,
-    readonly detail?: string
-  ) {
-    super(title);
-  }
-}
+export { ApiDomainError, type AuthUser };
 
 export interface IdempotencyRecord {
   requestHash: string;
@@ -27,14 +22,7 @@ export interface IdempotencyRecord {
   responseBody: unknown;
 }
 
-export interface AuthUser {
-  userId: string;
-  email: string;
-  aal: 'aal1' | 'aal2';
-  accessToken: string;
-}
-
-export interface DataStore {
+export interface DataStore extends PlatformContext {
   listOrganizations(user: AuthUser): Promise<OrganizationDto[]>;
   createOrganization(
     user: AuthUser,
@@ -98,7 +86,7 @@ export class InMemoryDataStore implements DataStore {
   private readonly auditEvents = new Map<string, AuditEventDto[]>();
   private readonly idempotency = new Map<string, IdempotencyRecord>();
 
-  private async appendAudit(params: {
+  async appendAudit(params: {
     organizationId: string;
     actorId: string;
     actorType: 'user' | 'system';
@@ -140,7 +128,7 @@ export class InMemoryDataStore implements DataStore {
     this.auditEvents.set(params.organizationId, list);
   }
 
-  private async requirePermission(
+  async requirePermission(
     user: AuthUser,
     organizationId: string,
     permission: Permission
@@ -159,6 +147,12 @@ export class InMemoryDataStore implements DataStore {
       throw new ApiDomainError(403, 'Insufficient permissions');
     }
     return member;
+  }
+
+  async getOrganizationBaseCurrency(_user: AuthUser, organizationId: string): Promise<string> {
+    const org = this.orgs.get(organizationId);
+    if (!org) throw new ApiDomainError(404, 'Organization not found');
+    return org.base_currency;
   }
 
   async listOrganizations(user: AuthUser): Promise<OrganizationDto[]> {
@@ -553,6 +547,28 @@ export class SupabaseRpcStore implements DataStore {
       method: 'POST',
       body: JSON.stringify({ p_org_id: organizationId }),
     });
+  }
+
+  async requirePermission(
+    user: AuthUser,
+    organizationId: string,
+    permission: Permission
+  ): Promise<{ role: OrgRole }> {
+    const m = await this.getMembership(user, organizationId);
+    if (!m || m.status !== 'active') throw new ApiDomainError(404, 'Organization not found');
+    if (!hasRolePermission(m.role, permission)) throw new ApiDomainError(403, 'Insufficient permissions');
+    return { role: m.role };
+  }
+
+  async getOrganizationBaseCurrency(user: AuthUser, organizationId: string): Promise<string> {
+    const orgs = await this.listOrganizations(user);
+    const org = orgs.find((o) => o.id === organizationId);
+    if (!org) throw new ApiDomainError(404, 'Organization not found');
+    return org.base_currency;
+  }
+
+  async appendAudit(): Promise<void> {
+    // Written atomically inside Postgres RPC functions in Supabase mode.
   }
 
   async getIdempotencyRecord(): Promise<IdempotencyRecord | null> {

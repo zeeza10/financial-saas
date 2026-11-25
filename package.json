@@ -14,7 +14,7 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -b packages/contracts packages/ledger-core packages/storage apps/api apps/jobs apps/web",
+    "typecheck": "tsc -b packages/contracts packages/ledger-core packages/storage modules/ledger modules/banking apps/api apps/jobs apps/web",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:financial": "vitest run packages/ledger-core tests/financial",

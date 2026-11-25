@@ -1,10 +1,21 @@
 import { Hono } from 'hono';
 import {
+  CreateAccountRequestSchema,
+  CreateBankAccountRequestSchema,
+  CreateJournalDraftRequestSchema,
   CreateOrganizationRequestSchema,
+  CreatePeriodRequestSchema,
+  CreateTransferRequestSchema,
   CursorPageQuerySchema,
+  ImportCsvTransactionsRequestSchema,
   InviteMemberRequestSchema,
   LoginRequestSchema,
+  MatchReconciliationRequestSchema,
+  PostBankTransactionRequestSchema,
+  ReopenPeriodRequestSchema,
+  ReverseJournalEntryRequestSchema,
   SignupRequestSchema,
+  StartReconciliationRequestSchema,
   UpdateMemberRoleRequestSchema,
   UuidSchema,
   createProblemDetails,
@@ -12,6 +23,16 @@ import {
   roleRequiresMfa,
   type Permission,
 } from '@financial-saas/contracts';
+import {
+  InMemoryLedgerStore,
+  LedgerModule,
+  SupabaseLedgerStore,
+} from '@financial-saas/ledger';
+import {
+  BankingModule,
+  InMemoryBankingStore,
+  SupabaseBankingStore,
+} from '@financial-saas/banking';
 import type { ApiEnv } from './env.js';
 import {
   InMemoryRateLimiter,
@@ -31,6 +52,7 @@ import {
 } from './security.js';
 import {
   ApiDomainError,
+  InMemoryDataStore,
   SupabaseRpcStore,
   type AuthUser,
   type DataStore,
@@ -117,6 +139,65 @@ export function createApiApp(deps: ApiDeps = {}) {
   const app = new Hono<{ Bindings: ApiEnv; Variables: HonoVariables }>();
   const rateLimiter = deps.rateLimiter ?? new InMemoryRateLimiter();
   const resolveEnv = (cEnv: ApiEnv) => (deps.getEnv ? deps.getEnv(cEnv) : cEnv);
+  const inMemoryModuleCache = new WeakMap<
+    DataStore,
+    { ledger: LedgerModule; banking: BankingModule }
+  >();
+
+  function resolveModules(env: ApiEnv, store: DataStore): { ledger: LedgerModule; banking: BankingModule } {
+    if (store instanceof InMemoryDataStore) {
+      let cached = inMemoryModuleCache.get(store);
+      if (!cached) {
+        const ledger = new LedgerModule(store, new InMemoryLedgerStore(store));
+        const banking = new BankingModule(store, ledger, new InMemoryBankingStore(ledger));
+        cached = { ledger, banking };
+        inMemoryModuleCache.set(store, cached);
+      }
+      return cached;
+    }
+    const ledger = new LedgerModule(store, new SupabaseLedgerStore(env));
+    const banking = new BankingModule(store, ledger, new SupabaseBankingStore(env));
+    return { ledger, banking };
+  }
+
+  async function runIdempotent<T>(params: {
+    store: DataStore;
+    user: AuthUser;
+    organizationId: string;
+    route: string;
+    idempotencyKey: string | undefined;
+    rawBody: string;
+    statusCode: 200 | 201;
+    execute: () => Promise<T>;
+  }): Promise<{ statusCode: number; body: T }> {
+    if (!params.idempotencyKey) {
+      throw new ApiDomainError(400, 'Idempotency-Key header is required');
+    }
+    const requestHash = await sha256Hex(params.rawBody);
+    const existing = await params.store.getIdempotencyRecord({
+      user: params.user,
+      organizationId: params.organizationId,
+      route: params.route,
+      key: params.idempotencyKey,
+    });
+    if (existing) {
+      if (existing.requestHash !== requestHash) {
+        throw new ApiDomainError(422, 'Idempotency-Key reused with different request body');
+      }
+      return { statusCode: existing.statusCode, body: existing.responseBody as T };
+    }
+    const body = await params.execute();
+    await params.store.saveIdempotencyRecord({
+      user: params.user,
+      organizationId: params.organizationId,
+      route: params.route,
+      key: params.idempotencyKey,
+      requestHash,
+      statusCode: params.statusCode,
+      responseBody: body,
+    });
+    return { statusCode: params.statusCode, body };
+  }
 
   app.use('*', securityHeadersMiddleware());
   app.use(
@@ -513,6 +594,394 @@ export function createApiApp(deps: ApiDeps = {}) {
     const orgId = await requireOrgPermission(c, store, user, 'audit:read');
     const valid = await store.verifyAuditChain(user, orgId);
     return c.json({ valid });
+  });
+
+  // --- Phase 4: Chart of Accounts, Ledger, Periods, Banking, Transfers, CSV Import, Reconciliation ---
+
+  app.get('/v1/accounts', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'accounts:read');
+    const { ledger } = resolveModules(env, store);
+    const items = await ledger.listAccounts(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/accounts', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'accounts:write');
+    const { rawText, data } = await parseStrictJson(c.req, CreateAccountRequestSchema);
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/accounts',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        account: await ledger.createAccount(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/accounts/seed-template', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'accounts:write');
+    const rawText = await c.req.text();
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/accounts/seed-template',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText || '{}',
+      statusCode: 201,
+      execute: async () => ({
+        items: await ledger.seedDefaultCoa(user, orgId, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/periods', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { ledger } = resolveModules(env, store);
+    const items = await ledger.listPeriods(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/periods', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'period:close');
+    const { rawText, data } = await parseStrictJson(c.req, CreatePeriodRequestSchema);
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/periods',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        period: await ledger.createPeriod(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/periods/:periodId/close', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'period:close');
+    const periodId = UuidSchema.safeParse(c.req.param('periodId'));
+    if (!periodId.success) throw new ApiDomainError(404, 'Period not found');
+    const { ledger } = resolveModules(env, store);
+    const period = await ledger.closePeriod(user, orgId, periodId.data, c.get('requestId'));
+    return c.json({ period });
+  });
+
+  app.post('/v1/periods/:periodId/reopen', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'period:reopen');
+    const periodId = UuidSchema.safeParse(c.req.param('periodId'));
+    if (!periodId.success) throw new ApiDomainError(404, 'Period not found');
+    const { data } = await parseStrictJson(c.req, ReopenPeriodRequestSchema);
+    const { ledger } = resolveModules(env, store);
+    const period = await ledger.reopenPeriod(user, orgId, periodId.data, data, c.get('requestId'));
+    return c.json({ period });
+  });
+
+  app.get('/v1/journal-entries', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { ledger } = resolveModules(env, store);
+    const items = await ledger.listJournalEntries(user, orgId);
+    return c.json({ items });
+  });
+
+  app.get('/v1/ledger', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { ledger } = resolveModules(env, store);
+    const all = await ledger.listJournalEntries(user, orgId);
+    return c.json({ items: all.filter((e) => e.status === 'posted') });
+  });
+
+  app.post('/v1/journal-entries', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:draft');
+    const { rawText, data } = await parseStrictJson(c.req, CreateJournalDraftRequestSchema);
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/journal-entries',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        entry: await ledger.createDraftEntry(user, orgId, data),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/journal-entries/:entryId/post', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const entryId = UuidSchema.safeParse(c.req.param('entryId'));
+    if (!entryId.success) throw new ApiDomainError(404, 'Journal entry not found');
+    const rawText = await c.req.text();
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/journal-entries/${entryId.data}/post`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText || '{}',
+      statusCode: 200,
+      execute: async () => ({
+        entry: await ledger.postJournalEntry(user, orgId, entryId.data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 200);
+  });
+
+  app.post('/v1/journal-entries/:entryId/reverse', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const entryId = UuidSchema.safeParse(c.req.param('entryId'));
+    if (!entryId.success) throw new ApiDomainError(404, 'Journal entry not found');
+    const { rawText, data } = await parseStrictJson(c.req, ReverseJournalEntryRequestSchema);
+    const { ledger } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/journal-entries/${entryId.data}/reverse`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        entry: await ledger.reverseJournalEntry(user, orgId, entryId.data, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/trial-balance', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const asOfDate = c.req.query('as_of_date') ?? new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+      throw new ApiDomainError(422, 'as_of_date must be YYYY-MM-DD');
+    }
+    const includePersonal = c.req.query('include_personal') === 'true';
+    const { ledger } = resolveModules(env, store);
+    const report = await ledger.getTrialBalance(user, orgId, asOfDate, includePersonal);
+    return c.json({ report });
+  });
+
+  app.get('/v1/bank-accounts', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:read');
+    const { banking } = resolveModules(env, store);
+    const items = await banking.listBankAccounts(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/bank-accounts', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:write');
+    const { rawText, data } = await parseStrictJson(c.req, CreateBankAccountRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/bank-accounts',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        bank_account: await banking.createBankAccount(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/transfers', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, CreateTransferRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/transfers',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: () => banking.createTransfer(user, orgId, data, c.get('requestId')),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/bank-transactions', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:read');
+    const bankAccountId = c.req.query('bank_account_id');
+    if (bankAccountId && !UuidSchema.safeParse(bankAccountId).success) {
+      throw new ApiDomainError(422, 'Invalid bank_account_id');
+    }
+    const { banking } = resolveModules(env, store);
+    const items = await banking.listBankTransactions(user, orgId, bankAccountId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/imports', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'transactions:import');
+    const { rawText, data } = await parseStrictJson(c.req, ImportCsvTransactionsRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/imports',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: () => banking.importCsvTransactions(user, orgId, data, c.get('requestId')),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/bank-transactions/:txId/post', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const txId = UuidSchema.safeParse(c.req.param('txId'));
+    if (!txId.success) throw new ApiDomainError(404, 'Bank transaction not found');
+    const { rawText, data } = await parseStrictJson(c.req, PostBankTransactionRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/bank-transactions/${txId.data}/post`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 200,
+      execute: () => banking.postBankTransaction(user, orgId, txId.data, data, c.get('requestId')),
+    });
+    return c.json(res.body, res.statusCode as 200);
+  });
+
+  app.get('/v1/reconciliations', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:read');
+    const { banking } = resolveModules(env, store);
+    const items = await banking.listReconciliations(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/reconciliations', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:write');
+    const { rawText, data } = await parseStrictJson(c.req, StartReconciliationRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/reconciliations',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        reconciliation: await banking.startReconciliation(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/reconciliations/:recId/match', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:write');
+    const recId = UuidSchema.safeParse(c.req.param('recId'));
+    if (!recId.success) throw new ApiDomainError(404, 'Reconciliation not found');
+    const { data } = await parseStrictJson(c.req, MatchReconciliationRequestSchema);
+    const { banking } = resolveModules(env, store);
+    const reconciliation = await banking.matchReconciliation(user, orgId, recId.data, data);
+    return c.json({ reconciliation });
+  });
+
+  app.post('/v1/reconciliations/:recId/complete', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'banking:write');
+    const recId = UuidSchema.safeParse(c.req.param('recId'));
+    if (!recId.success) throw new ApiDomainError(404, 'Reconciliation not found');
+    const { banking } = resolveModules(env, store);
+    const reconciliation = await banking.completeReconciliation(
+      user,
+      orgId,
+      recId.data,
+      c.get('requestId')
+    );
+    return c.json({ reconciliation });
   });
 
   return app;

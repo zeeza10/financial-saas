@@ -9,7 +9,9 @@
   "references": [
     { "path": "../../packages/contracts" },
     { "path": "../../packages/ledger-core" },
-    { "path": "../../packages/storage" }
+    { "path": "../../packages/storage" },
+    { "path": "../../modules/ledger" },
+    { "path": "../../modules/banking" }
   ],
   "include": ["src/**/*.ts"]
 }
