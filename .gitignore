@@ -1,0 +1,29 @@
+# Dependencies and build outputs
+node_modules/
+dist/
+build/
+.turbo/
+.wrangler/
+.vite/
+
+# Environment files and local secrets (never commit real secrets)
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Local Supabase runtime state
+supabase/.branches/
+supabase/.temp/
+
+# Test and coverage artifacts
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.log

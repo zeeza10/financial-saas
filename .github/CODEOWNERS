@@ -1,0 +1,14 @@
+# Protected paths requiring human code-owner + security review (AI_CHANGE_CONTROL.md)
+# Add a separate @security-reviewer-handle once designated.
+
+/AGENTS.md                      @zeeza10
+/docs/ai/**                     @zeeza10
+/docs/security/**               @zeeza10
+/docs/product/BUSINESS_RULES.md @zeeza10
+/supabase/migrations/**         @zeeza10
+/supabase/tests/**              @zeeza10
+/packages/ledger-core/**        @zeeza10
+/packages/contracts/**          @zeeza10
+/tests/financial/**             @zeeza10
+/tests/security/**              @zeeza10
+/.github/**                     @zeeza10

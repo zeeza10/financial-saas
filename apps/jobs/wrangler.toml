@@ -1,0 +1,11 @@
+name = "financial-saas-jobs"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[triggers]
+crons = ["0 2 * * *"]
+
+# Only this isolated background Worker holds JOBS_SUPABASE_SERVICE_ROLE_KEY
+# via `wrangler secret put` (AUTHORIZATION_RBAC_RLS.md §4).
+# Every query MUST include an explicit organization_id filter.
