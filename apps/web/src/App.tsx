@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   BookOpen,
+  Briefcase,
   Building2,
   CalendarClock,
   CheckCircle2,
   Landmark,
   Layers,
   Menu,
+  PieChart,
   ShieldCheck,
   Users,
   X,
@@ -15,22 +17,40 @@ import {
   ORG_ROLES,
   hasRolePermission,
   type AccountDto,
+  type AssetDto,
   type AuditEventDto,
   type BankAccountDto,
   type BankTransactionDto,
+  type InvoiceBillDto,
   type JournalEntryDto,
+  type LiabilityDto,
   type MemberDto,
   type OrganizationDto,
   type OrgRole,
+  type PartyDto,
   type PeriodDto,
+  type ProfitDistributionDto,
+  type ProfitShareAgreementDto,
   type ReconciliationDto,
+  type SalaryRunDto,
   type TrialBalanceReportDto,
 } from '@financial-saas/contracts';
 import { apiClient, type SessionUser } from './apiClient.js';
 import { LedgerPanel } from './components/LedgerPanel.js';
 import { BankingPanel } from './components/BankingPanel.js';
+import { OperationsPanel } from './components/OperationsPanel.js';
+import { InvestorsPayrollPanel } from './components/InvestorsPayrollPanel.js';
 
-type ActiveTab = 'overview' | 'coa' | 'journals' | 'banking' | 'periods' | 'members' | 'audit';
+type ActiveTab =
+  | 'overview'
+  | 'coa'
+  | 'journals'
+  | 'banking'
+  | 'operations'
+  | 'investors'
+  | 'periods'
+  | 'members'
+  | 'audit';
 
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -66,6 +86,13 @@ export function App() {
   const [bankAccounts, setBankAccounts] = useState<BankAccountDto[]>([]);
   const [bankTxs, setBankTxs] = useState<BankTransactionDto[]>([]);
   const [reconciliations, setReconciliations] = useState<ReconciliationDto[]>([]);
+  const [parties, setParties] = useState<PartyDto[]>([]);
+  const [invoicesBills, setInvoicesBills] = useState<InvoiceBillDto[]>([]);
+  const [assets, setAssets] = useState<AssetDto[]>([]);
+  const [liabilities, setLiabilities] = useState<LiabilityDto[]>([]);
+  const [agreements, setAgreements] = useState<ProfitShareAgreementDto[]>([]);
+  const [distributions, setDistributions] = useState<ProfitDistributionDto[]>([]);
+  const [salaryRuns, setSalaryRuns] = useState<SalaryRunDto[]>([]);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
 
@@ -119,6 +146,19 @@ export function App() {
       tasks.push(apiClient.listBankAccounts(activeOrg.id).then(setBankAccounts));
       tasks.push(apiClient.listBankTransactions(activeOrg.id).then(setBankTxs));
       tasks.push(apiClient.listReconciliations(activeOrg.id).then(setReconciliations));
+    }
+    if (hasRolePermission(activeOrg.role, 'organizations:read')) {
+      tasks.push(apiClient.listParties(activeOrg.id).then(setParties));
+    }
+    if (hasRolePermission(activeOrg.role, 'reports:read')) {
+      tasks.push(apiClient.listInvoicesBills(activeOrg.id).then(setInvoicesBills));
+      tasks.push(apiClient.listAssets(activeOrg.id).then(setAssets));
+      tasks.push(apiClient.listLiabilities(activeOrg.id).then(setLiabilities));
+      tasks.push(apiClient.listSalaryRuns(activeOrg.id).then(setSalaryRuns));
+    }
+    if (hasRolePermission(activeOrg.role, 'profit_sharing:read')) {
+      tasks.push(apiClient.listProfitShareAgreements(activeOrg.id).then(setAgreements));
+      tasks.push(apiClient.listProfitDistributions(activeOrg.id).then(setDistributions));
     }
     if (hasRolePermission(activeOrg.role, 'members:read')) {
       tasks.push(apiClient.listMembers(activeOrg.id).then(setMembers));
@@ -317,6 +357,10 @@ export function App() {
           {activeOrg && hasRolePermission(activeOrg.role, 'banking:read') &&
             navItem('banking', 'Banking & Import', Landmark)}
           {activeOrg && hasRolePermission(activeOrg.role, 'reports:read') &&
+            navItem('operations', 'Expenses, AP/AR & eBay', Briefcase)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'profit_sharing:read') &&
+            navItem('investors', 'Investors & Payroll', PieChart)}
+          {activeOrg && hasRolePermission(activeOrg.role, 'reports:read') &&
             navItem('periods', 'Periods & Trial Bal.', CalendarClock)}
           {activeOrg && hasRolePermission(activeOrg.role, 'members:read') &&
             navItem('members', 'Team & Roles', Users)}
@@ -462,6 +506,33 @@ export function App() {
               transactions={bankTxs}
               entries={entries}
               reconciliations={reconciliations}
+              onRefresh={refreshActiveOrgData}
+              onError={setError}
+            />
+          )}
+
+          {activeOrg && tab === 'operations' && (
+            <OperationsPanel
+              org={activeOrg}
+              accounts={accounts}
+              parties={parties}
+              invoicesBills={invoicesBills}
+              assets={assets}
+              liabilities={liabilities}
+              onRefresh={refreshActiveOrgData}
+              onError={setError}
+            />
+          )}
+
+          {activeOrg && tab === 'investors' && (
+            <InvestorsPayrollPanel
+              org={activeOrg}
+              accounts={accounts}
+              parties={parties}
+              periods={periods}
+              agreements={agreements}
+              distributions={distributions}
+              salaryRuns={salaryRuns}
               onRefresh={refreshActiveOrgData}
               onError={setError}
             />

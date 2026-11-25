@@ -149,6 +149,16 @@ export class InMemoryDataStore implements DataStore {
     return member;
   }
 
+  async getUserPartyId(user: AuthUser, organizationId: string): Promise<string | null> {
+    const member = Array.from(this.members.values()).find(
+      (m) =>
+        m.organization_id === organizationId &&
+        m.user_id === user.userId &&
+        m.status === 'active'
+    );
+    return member?.party_id ?? null;
+  }
+
   async getOrganizationBaseCurrency(_user: AuthUser, organizationId: string): Promise<string> {
     const org = this.orgs.get(organizationId);
     if (!org) throw new ApiDomainError(404, 'Organization not found');
@@ -558,6 +568,14 @@ export class SupabaseRpcStore implements DataStore {
     if (!m || m.status !== 'active') throw new ApiDomainError(404, 'Organization not found');
     if (!hasRolePermission(m.role, permission)) throw new ApiDomainError(403, 'Insufficient permissions');
     return { role: m.role };
+  }
+
+  async getUserPartyId(user: AuthUser, organizationId: string): Promise<string | null> {
+    const rows = await this.rest<Array<{ party_id: string | null }>>(
+      user,
+      `org_members?select=party_id&organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(user.userId)}&status=eq.active`
+    );
+    return rows[0]?.party_id ?? null;
   }
 
   async getOrganizationBaseCurrency(user: AuthUser, organizationId: string): Promise<string> {
