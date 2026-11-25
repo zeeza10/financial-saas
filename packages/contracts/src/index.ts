@@ -5,3 +5,4 @@ export * from './api.js';
 export * from './ledger.js';
 export * from './module.js';
 export * from './operations.js';
+export * from './reports.js';

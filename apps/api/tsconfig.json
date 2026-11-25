@@ -12,7 +12,8 @@
     { "path": "../../packages/storage" },
     { "path": "../../modules/ledger" },
     { "path": "../../modules/banking" },
-    { "path": "../../modules/operations" }
+    { "path": "../../modules/operations" },
+    { "path": "../../modules/reports" }
   ],
   "include": ["src/**/*.ts"]
 }

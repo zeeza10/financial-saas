@@ -14,6 +14,7 @@
     "@financial-saas/ledger": "*",
     "@financial-saas/ledger-core": "*",
     "@financial-saas/operations": "*",
+    "@financial-saas/reports": "*",
     "@financial-saas/storage": "*",
     "hono": "^4.7.8",
     "jose": "^6.0.11",

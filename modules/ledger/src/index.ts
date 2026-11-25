@@ -1,5 +1,6 @@
 import {
   ApiDomainError,
+  hasRolePermission,
   type AccountDto,
   type AuthUser,
   type CreateAccountRequest,
@@ -337,6 +338,7 @@ export class InMemoryLedgerStore implements LedgerStore {
       return {
         accountId: l.account_id,
         accountType: acc.account_type,
+        ownershipType: acc.ownership_type,
         side: l.side,
         amountMinor: BigInt(l.amount_minor),
         currency: l.currency,
@@ -415,6 +417,7 @@ export class InMemoryLedgerStore implements LedgerStore {
       return {
         accountId: l.account_id,
         accountType: acc.account_type,
+        ownershipType: acc.ownership_type,
         side: l.side,
         amountMinor: BigInt(l.amount_minor),
         currency: l.currency,
@@ -570,6 +573,17 @@ export class LedgerModule {
 
   async listJournalEntries(user: AuthUser, orgId: string): Promise<JournalEntryDto[]> {
     await this.ctx.requirePermission(user, orgId, 'reports:read');
+    return this.store.listJournalEntries(user, orgId);
+  }
+
+  async listEntriesForReports(user: AuthUser, orgId: string): Promise<JournalEntryDto[]> {
+    const { role } = await this.ctx.requirePermission(user, orgId, 'organizations:read');
+    if (
+      !hasRolePermission(role, 'reports:read') &&
+      !hasRolePermission(role, 'reports:read_scoped')
+    ) {
+      throw new ApiDomainError(403, 'Insufficient permissions');
+    }
     return this.store.listJournalEntries(user, orgId);
   }
 

@@ -38,7 +38,7 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
-          patterns: ['@financial-saas/ledger', '@financial-saas/banking', '@financial-saas/operations', '**/modules/**', '**/apps/api/**'],
+          patterns: ['@financial-saas/ledger', '@financial-saas/banking', '@financial-saas/operations', '@financial-saas/reports', '**/modules/**', '**/apps/api/**'],
         },
       ],
       'no-restricted-properties': [

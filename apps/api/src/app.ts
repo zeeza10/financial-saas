@@ -15,6 +15,8 @@ import {
   CreateProfitShareAgreementRequestSchema,
   CreateTransferRequestSchema,
   CursorPageQuerySchema,
+  DateRangeFilterSchema,
+  ExportReportQuerySchema,
   ImportCsvTransactionsRequestSchema,
   InvestorContributionRequestSchema,
   InviteMemberRequestSchema,
@@ -52,6 +54,7 @@ import {
   OperationsModule,
   SupabaseOperationsStore,
 } from '@financial-saas/operations';
+import { ReportsModule } from '@financial-saas/reports';
 import type { ApiEnv } from './env.js';
 import {
   InMemoryRateLimiter,
@@ -160,20 +163,21 @@ export function createApiApp(deps: ApiDeps = {}) {
   const resolveEnv = (cEnv: ApiEnv) => (deps.getEnv ? deps.getEnv(cEnv) : cEnv);
   const inMemoryModuleCache = new WeakMap<
     DataStore,
-    { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule }
+    { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule; reports: ReportsModule }
   >();
 
   function resolveModules(
     env: ApiEnv,
     store: DataStore
-  ): { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule } {
+  ): { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule; reports: ReportsModule } {
     if (store instanceof InMemoryDataStore) {
       let cached = inMemoryModuleCache.get(store);
       if (!cached) {
         const ledger = new LedgerModule(store, new InMemoryLedgerStore(store));
         const banking = new BankingModule(store, ledger, new InMemoryBankingStore(ledger));
         const operations = new OperationsModule(store, ledger, new InMemoryOperationsStore(store));
-        cached = { ledger, banking, operations };
+        const reports = new ReportsModule(store, ledger);
+        cached = { ledger, banking, operations, reports };
         inMemoryModuleCache.set(store, cached);
       }
       return cached;
@@ -181,7 +185,8 @@ export function createApiApp(deps: ApiDeps = {}) {
     const ledger = new LedgerModule(store, new SupabaseLedgerStore(env));
     const banking = new BankingModule(store, ledger, new SupabaseBankingStore(env));
     const operations = new OperationsModule(store, ledger, new SupabaseOperationsStore(env));
-    return { ledger, banking, operations };
+    const reports = new ReportsModule(store, ledger);
+    return { ledger, banking, operations, reports };
   }
 
   async function runIdempotent<T>(params: {
@@ -1424,6 +1429,109 @@ export function createApiApp(deps: ApiDeps = {}) {
       execute: () => operations.recordEbayPayout(user, orgId, data, c.get('requestId')),
     });
     return c.json(res.body, res.statusCode as 201);
+  });
+
+  // --- Phase 6: Dashboard KPIs, Financial Statements & Audited Exports ---
+
+  function parseDateFilter(c: { req: { query: (k: string) => string | undefined } }) {
+    const today = new Date().toISOString().slice(0, 10);
+    const yearStart = `${today.slice(0, 4)}-01-01`;
+    const parsed = DateRangeFilterSchema.safeParse({
+      start_date: c.req.query('start_date') ?? yearStart,
+      end_date: c.req.query('end_date') ?? today,
+      ...(c.req.query('account_id') ? { account_id: c.req.query('account_id') } : {}),
+      ...(c.req.query('party_id') ? { party_id: c.req.query('party_id') } : {}),
+    });
+    if (!parsed.success) {
+      throw new ApiDomainError(422, 'Invalid report filter parameters');
+    }
+    return parsed.data;
+  }
+
+  app.get('/v1/dashboard', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const filter = parseDateFilter(c);
+    const { reports } = resolveModules(env, store);
+    const summary = await reports.getDashboardSummary(user, orgId, filter);
+    return c.json({ summary });
+  });
+
+  app.get('/v1/reports/pnl', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const filter = parseDateFilter(c);
+    const { reports } = resolveModules(env, store);
+    const report = await reports.getProfitAndLoss(user, orgId, filter);
+    return c.json({ report });
+  });
+
+  app.get('/v1/reports/balance-sheet', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const asOfDate = c.req.query('as_of_date') ?? new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+      throw new ApiDomainError(422, 'as_of_date must be YYYY-MM-DD');
+    }
+    const { reports } = resolveModules(env, store);
+    const report = await reports.getBalanceSheet(user, orgId, asOfDate);
+    return c.json({ report });
+  });
+
+  app.get('/v1/reports/cash-flow', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const filter = parseDateFilter(c);
+    const { reports } = resolveModules(env, store);
+    const report = await reports.getCashFlow(user, orgId, filter.start_date, filter.end_date);
+    return c.json({ report });
+  });
+
+  app.get('/v1/reports/export', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'data:export');
+
+    const rl = rateLimiter.check(`export:${orgId}:${user.userId}`, 30, 60_000);
+    if (!rl.allowed) {
+      return c.json(
+        createProblemDetails({ status: 429, title: 'Export rate limit exceeded', requestId: c.get('requestId') }),
+        429,
+        { 'Retry-After': String(rl.retryAfterSeconds), 'Content-Type': 'application/problem+json' }
+      );
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const parsed = ExportReportQuerySchema.safeParse({
+      report: c.req.query('report'),
+      format: c.req.query('format'),
+      start_date: c.req.query('start_date') ?? `${today.slice(0, 4)}-01-01`,
+      end_date: c.req.query('end_date') ?? today,
+    });
+    if (!parsed.success) {
+      throw new ApiDomainError(422, 'Invalid export parameters');
+    }
+
+    const { reports } = resolveModules(env, store);
+    const file = await reports.exportReport(user, orgId, parsed.data, c.get('requestId'));
+    return new Response(new Uint8Array(file.bytes), {
+      status: 200,
+      headers: {
+        'Content-Type': file.contentType,
+        'Content-Disposition': `attachment; filename="${file.filename}"`,
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+      },
+    });
   });
 
   return app;

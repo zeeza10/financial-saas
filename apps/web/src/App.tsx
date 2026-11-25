@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
+  BarChart3,
   BookOpen,
   Briefcase,
   Building2,
   CalendarClock,
   CheckCircle2,
+  FileSpreadsheet,
   Landmark,
   Layers,
   Menu,
@@ -19,8 +21,11 @@ import {
   type AccountDto,
   type AssetDto,
   type AuditEventDto,
+  type BalanceSheetReportDto,
   type BankAccountDto,
   type BankTransactionDto,
+  type CashFlowReportDto,
+  type DashboardSummaryDto,
   type InvoiceBillDto,
   type JournalEntryDto,
   type LiabilityDto,
@@ -35,19 +40,24 @@ import {
   type SalaryRunDto,
   type TrialBalanceReportDto,
 } from '@financial-saas/contracts';
+import type { ProfitAndLossSummary } from '@financial-saas/ledger-core';
 import { apiClient, type SessionUser } from './apiClient.js';
 import { LedgerPanel } from './components/LedgerPanel.js';
 import { BankingPanel } from './components/BankingPanel.js';
 import { OperationsPanel } from './components/OperationsPanel.js';
 import { InvestorsPayrollPanel } from './components/InvestorsPayrollPanel.js';
+import { DashboardPanel } from './components/DashboardPanel.js';
+import { ReportsPanel } from './components/ReportsPanel.js';
 
 type ActiveTab =
+  | 'dashboard'
   | 'overview'
   | 'coa'
   | 'journals'
   | 'banking'
   | 'operations'
   | 'investors'
+  | 'reports'
   | 'periods'
   | 'members'
   | 'audit';
@@ -93,6 +103,17 @@ export function App() {
   const [agreements, setAgreements] = useState<ProfitShareAgreementDto[]>([]);
   const [distributions, setDistributions] = useState<ProfitDistributionDto[]>([]);
   const [salaryRuns, setSalaryRuns] = useState<SalaryRunDto[]>([]);
+
+  // Phase 6 Dashboard & Reports filters/state
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(`${todayIso.slice(0, 4)}-01-01`);
+  const [endDate, setEndDate] = useState(todayIso);
+  const [filterAccountId, setFilterAccountId] = useState('');
+  const [filterPartyId, setFilterPartyId] = useState('');
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummaryDto | null>(null);
+  const [pnlReport, setPnlReport] = useState<ProfitAndLossSummary | null>(null);
+  const [balanceSheet, setBalanceSheet] = useState<BalanceSheetReportDto | null>(null);
+  const [cashFlow, setCashFlow] = useState<CashFlowReportDto | null>(null);
 
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
 
@@ -150,6 +171,21 @@ export function App() {
     if (hasRolePermission(activeOrg.role, 'organizations:read')) {
       tasks.push(apiClient.listParties(activeOrg.id).then(setParties));
     }
+    if (
+      hasRolePermission(activeOrg.role, 'reports:read') ||
+      hasRolePermission(activeOrg.role, 'reports:read_scoped')
+    ) {
+      const filterOpts = {
+        startDate,
+        endDate,
+        ...(filterAccountId ? { accountId: filterAccountId } : {}),
+        ...(filterPartyId ? { partyId: filterPartyId } : {}),
+      };
+      tasks.push(apiClient.getDashboard(activeOrg.id, filterOpts).then(setDashboardSummary));
+      tasks.push(apiClient.getProfitAndLoss(activeOrg.id, filterOpts).then(setPnlReport));
+      tasks.push(apiClient.getBalanceSheet(activeOrg.id, endDate).then(setBalanceSheet));
+      tasks.push(apiClient.getCashFlow(activeOrg.id, { startDate, endDate }).then(setCashFlow));
+    }
     if (hasRolePermission(activeOrg.role, 'reports:read')) {
       tasks.push(apiClient.listInvoicesBills(activeOrg.id).then(setInvoicesBills));
       tasks.push(apiClient.listAssets(activeOrg.id).then(setAssets));
@@ -167,7 +203,7 @@ export function App() {
       tasks.push(apiClient.listAuditEvents(activeOrg.id).then(setAuditEvents));
     }
     await Promise.all(tasks);
-  }, [activeOrg]);
+  }, [activeOrg, startDate, endDate, filterAccountId, filterPartyId]);
 
   useEffect(() => {
     if (!activeOrg) return;
@@ -349,6 +385,8 @@ export function App() {
           )}
         </div>
         <nav className="nav-list">
+          {activeOrg && (hasRolePermission(activeOrg.role, 'reports:read') || hasRolePermission(activeOrg.role, 'reports:read_scoped')) &&
+            navItem('dashboard', 'Dashboard', BarChart3)}
           {navItem('overview', 'Organizations', Building2)}
           {activeOrg && hasRolePermission(activeOrg.role, 'accounts:read') &&
             navItem('coa', 'Chart of Accounts', Layers)}
@@ -360,6 +398,8 @@ export function App() {
             navItem('operations', 'Expenses, AP/AR & eBay', Briefcase)}
           {activeOrg && hasRolePermission(activeOrg.role, 'profit_sharing:read') &&
             navItem('investors', 'Investors & Payroll', PieChart)}
+          {activeOrg && (hasRolePermission(activeOrg.role, 'reports:read') || hasRolePermission(activeOrg.role, 'reports:read_scoped')) &&
+            navItem('reports', 'Statements & Exports', FileSpreadsheet)}
           {activeOrg && hasRolePermission(activeOrg.role, 'reports:read') &&
             navItem('periods', 'Periods & Trial Bal.', CalendarClock)}
           {activeOrg && hasRolePermission(activeOrg.role, 'members:read') &&
@@ -417,6 +457,39 @@ export function App() {
             <div role="alert" className="alert-error">
               {error}
             </div>
+          )}
+
+          {activeOrg && tab === 'dashboard' && (
+            <DashboardPanel
+              org={activeOrg}
+              summary={dashboardSummary}
+              accounts={accounts}
+              parties={parties}
+              startDate={startDate}
+              endDate={endDate}
+              filterAccountId={filterAccountId}
+              filterPartyId={filterPartyId}
+              onFilterChange={(next) => {
+                setStartDate(next.startDate);
+                setEndDate(next.endDate);
+                setFilterAccountId(next.accountId);
+                setFilterPartyId(next.partyId);
+              }}
+            />
+          )}
+
+          {activeOrg && tab === 'reports' && (
+            <ReportsPanel
+              org={activeOrg}
+              startDate={startDate}
+              endDate={endDate}
+              pnl={pnlReport}
+              balanceSheet={balanceSheet}
+              cashFlow={cashFlow}
+              trialBalance={trialBalance}
+              parties={parties}
+              onError={setError}
+            />
           )}
 
           {tab === 'overview' && (

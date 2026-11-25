@@ -18,6 +18,7 @@ export type JournalEntryKind =
 export interface JournalLineInput {
   readonly accountId: string;
   readonly accountType: AccountType;
+  readonly ownershipType?: AccountOwnershipType;
   readonly side: LineSide;
   readonly amountMinor: bigint;
   readonly currency: CurrencyCode;
@@ -85,9 +86,19 @@ export function validateJournalEntryForPost(input: JournalEntryValidationInput):
 
   let debitTotal = 0n;
   let creditTotal = 0n;
+  let seenOwnership: AccountOwnershipType | undefined;
 
   for (let i = 0; i < input.lines.length; i++) {
     const line = input.lines[i]!;
+    if (line.ownershipType) {
+      if (seenOwnership && seenOwnership !== line.ownershipType) {
+        throw new JournalValidationError(
+          'BR-006',
+          'Cannot mix business and personal accounts in a single journal entry'
+        );
+      }
+      seenOwnership = line.ownershipType;
+    }
     if (line.amountMinor <= 0n) {
       throw new JournalValidationError(
         'BR-001',

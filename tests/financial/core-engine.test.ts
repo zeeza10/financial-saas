@@ -244,7 +244,7 @@ describe('Phase 4 Core Financial Engine Integration (FT-01..FT-33)', () => {
         description: 'Personal savings deposit',
         lines: [
           { account_id: personalBank.id, side: 'debit', amount_minor: '300000', currency: 'USD' },
-          { account_id: byCode('3200').id, side: 'credit', amount_minor: '300000', currency: 'USD' },
+          { account_id: byCode('3900').id, side: 'credit', amount_minor: '300000', currency: 'USD' },
         ],
       },
     });
