@@ -1,10 +1,26 @@
 import type {
+  AccountDto,
   AuditEventDto,
+  BankAccountDto,
+  BankTransactionDto,
+  CreateAccountRequest,
+  CreateBankAccountRequest,
+  CreateJournalDraftRequest,
   CreateOrganizationRequest,
+  CreatePeriodRequest,
+  CreateTransferRequest,
+  ImportCsvTransactionsRequest,
   InviteMemberRequest,
+  JournalEntryDto,
+  MatchReconciliationRequest,
   MemberDto,
   OrganizationDto,
   OrgRole,
+  PeriodDto,
+  PostBankTransactionRequest,
+  ReconciliationDto,
+  StartReconciliationRequest,
+  TrialBalanceReportDto,
 } from '@financial-saas/contracts';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
@@ -35,9 +51,10 @@ function getCsrfToken(): string | null {
 export class ApiClientError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    readonly detail?: string
   ) {
-    super(message);
+    super(detail ? `${message}: ${detail}` : message);
   }
 }
 
@@ -77,12 +94,13 @@ async function request<T>(
   if (options.body !== undefined) {
     fetchInit.body = JSON.stringify(options.body);
   }
-  const res = await fetch(`${API_BASE}${path}`, fetchInit);
 
+  const res = await fetch(`${API_BASE}${path}`, fetchInit);
   const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   if (!res.ok) {
     const title = typeof json?.['title'] === 'string' ? json['title'] : `Request failed (${res.status})`;
-    throw new ApiClientError(res.status, title);
+    const detail = typeof json?.['detail'] === 'string' ? json['detail'] : undefined;
+    throw new ApiClientError(res.status, title, detail);
   }
   return json as T;
 }
@@ -188,5 +206,224 @@ export const apiClient = {
       body: {},
     });
     return res.valid;
+  },
+
+  // --- Phase 4: Core Financial Engine ---
+  async listAccounts(organizationId: string): Promise<AccountDto[]> {
+    const res = await request<{ items: AccountDto[] }>('/v1/accounts', { organizationId });
+    return res.items;
+  },
+
+  async seedCoaTemplate(organizationId: string): Promise<AccountDto[]> {
+    const res = await request<{ items: AccountDto[] }>('/v1/accounts/seed-template', {
+      method: 'POST',
+      organizationId,
+      body: {},
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.items;
+  },
+
+  async createAccount(organizationId: string, input: CreateAccountRequest): Promise<AccountDto> {
+    const res = await request<{ account: AccountDto }>('/v1/accounts', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.account;
+  },
+
+  async listPeriods(organizationId: string): Promise<PeriodDto[]> {
+    const res = await request<{ items: PeriodDto[] }>('/v1/periods', { organizationId });
+    return res.items;
+  },
+
+  async createPeriod(organizationId: string, input: CreatePeriodRequest): Promise<PeriodDto> {
+    const res = await request<{ period: PeriodDto }>('/v1/periods', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.period;
+  },
+
+  async closePeriod(organizationId: string, periodId: string): Promise<PeriodDto> {
+    const res = await request<{ period: PeriodDto }>(`/v1/periods/${periodId}/close`, {
+      method: 'POST',
+      organizationId,
+      body: {},
+    });
+    return res.period;
+  },
+
+  async reopenPeriod(organizationId: string, periodId: string, reason: string): Promise<PeriodDto> {
+    const res = await request<{ period: PeriodDto }>(`/v1/periods/${periodId}/reopen`, {
+      method: 'POST',
+      organizationId,
+      body: { reason },
+    });
+    return res.period;
+  },
+
+  async listJournalEntries(organizationId: string): Promise<JournalEntryDto[]> {
+    const res = await request<{ items: JournalEntryDto[] }>('/v1/journal-entries', { organizationId });
+    return res.items;
+  },
+
+  async createJournalDraft(
+    organizationId: string,
+    input: CreateJournalDraftRequest
+  ): Promise<JournalEntryDto> {
+    const res = await request<{ entry: JournalEntryDto }>('/v1/journal-entries', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.entry;
+  },
+
+  async postJournalEntry(organizationId: string, entryId: string): Promise<JournalEntryDto> {
+    const res = await request<{ entry: JournalEntryDto }>(`/v1/journal-entries/${entryId}/post`, {
+      method: 'POST',
+      organizationId,
+      body: {},
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.entry;
+  },
+
+  async reverseJournalEntry(
+    organizationId: string,
+    entryId: string,
+    reason: string
+  ): Promise<JournalEntryDto> {
+    const res = await request<{ entry: JournalEntryDto }>(`/v1/journal-entries/${entryId}/reverse`, {
+      method: 'POST',
+      organizationId,
+      body: { reason },
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.entry;
+  },
+
+  async getTrialBalance(
+    organizationId: string,
+    asOfDate: string
+  ): Promise<TrialBalanceReportDto> {
+    const res = await request<{ report: TrialBalanceReportDto }>(
+      `/v1/trial-balance?as_of_date=${encodeURIComponent(asOfDate)}`,
+      { organizationId }
+    );
+    return res.report;
+  },
+
+  async listBankAccounts(organizationId: string): Promise<BankAccountDto[]> {
+    const res = await request<{ items: BankAccountDto[] }>('/v1/bank-accounts', { organizationId });
+    return res.items;
+  },
+
+  async createBankAccount(
+    organizationId: string,
+    input: CreateBankAccountRequest
+  ): Promise<BankAccountDto> {
+    const res = await request<{ bank_account: BankAccountDto }>('/v1/bank-accounts', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.bank_account;
+  },
+
+  async createTransfer(organizationId: string, input: CreateTransferRequest): Promise<void> {
+    await request('/v1/transfers', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  },
+
+  async listBankTransactions(organizationId: string): Promise<BankTransactionDto[]> {
+    const res = await request<{ items: BankTransactionDto[] }>('/v1/bank-transactions', {
+      organizationId,
+    });
+    return res.items;
+  },
+
+  async importCsv(
+    organizationId: string,
+    input: ImportCsvTransactionsRequest
+  ): Promise<{ imported: number; duplicate_held: number }> {
+    return request('/v1/imports', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  },
+
+  async postBankTransaction(
+    organizationId: string,
+    txId: string,
+    input: PostBankTransactionRequest
+  ): Promise<void> {
+    await request(`/v1/bank-transactions/${txId}/post`, {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  },
+
+  async listReconciliations(organizationId: string): Promise<ReconciliationDto[]> {
+    const res = await request<{ items: ReconciliationDto[] }>('/v1/reconciliations', {
+      organizationId,
+    });
+    return res.items;
+  },
+
+  async startReconciliation(
+    organizationId: string,
+    input: StartReconciliationRequest
+  ): Promise<ReconciliationDto> {
+    const res = await request<{ reconciliation: ReconciliationDto }>('/v1/reconciliations', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.reconciliation;
+  },
+
+  async matchReconciliation(
+    organizationId: string,
+    recId: string,
+    input: MatchReconciliationRequest
+  ): Promise<ReconciliationDto> {
+    const res = await request<{ reconciliation: ReconciliationDto }>(
+      `/v1/reconciliations/${recId}/match`,
+      {
+        method: 'POST',
+        organizationId,
+        body: input,
+      }
+    );
+    return res.reconciliation;
+  },
+
+  async completeReconciliation(organizationId: string, recId: string): Promise<ReconciliationDto> {
+    const res = await request<{ reconciliation: ReconciliationDto }>(
+      `/v1/reconciliations/${recId}/complete`,
+      {
+        method: 'POST',
+        organizationId,
+        body: {},
+      }
+    );
+    return res.reconciliation;
   },
 };

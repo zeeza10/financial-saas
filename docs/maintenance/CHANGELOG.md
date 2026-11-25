@@ -14,6 +14,7 @@ Format: Keep a Changelog style; versions follow semantic versioning once code ex
 
 ## [Unreleased]
 ### Added
+- 0.3.0 (2026-11-26): Implemented Phase 4 Core Financial Engine (`modules/ledger`, `modules/banking`, migration `0002_core_ledger_and_banking.sql`, pgTAP suite `02_ledger_immutability_and_balance.sql`, `/v1` CoA/Periods/Journals/Trial Balance/Banking/Transfers/CSV Import/Reconciliation routes, React UI panels, and Phase 4 financial & security integration tests).
 - 0.2.0 (2026-11-26): Initialized standalone `financial-saas` repository skeleton linked to `zeeza10/financial-saas`; recorded Product Owner decisions closing OQ-001 (accrual basis), OQ-003 (selectable equity/loan per investor), OQ-006 (single base currency in Core MVP, multi-currency in R2), OQ-014 (zero default support access), OQ-015 / ADR-0004 (BFF httpOnly cookie sessions), OQ-019 (billing-ready schema with Stripe deferred post-MVP), OQ-020 (staged milestones M01-M08 -> R2 -> R3), OQ-022 / ADR-0003 (Postgres RPC over HTTPS), OQ-023 (mandatory MFA for Owner/Admin/Accountant), OQ-026 (gapless per-org entry numbers), and OQ-027 (largest-remainder rounding).
 
 ### Documentation

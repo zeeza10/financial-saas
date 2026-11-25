@@ -35,6 +35,12 @@ export default tseslint.config(
   {
     files: ['apps/web/**/*.{ts,tsx}'],
     rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: ['@financial-saas/ledger', '@financial-saas/banking', '**/modules/**', '**/apps/api/**'],
+        },
+      ],
       'no-restricted-properties': [
         'error',
         {
