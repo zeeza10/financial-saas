@@ -49,4 +49,4 @@
 - **Cloudflare + Supabase Production (after Phase 7 connection):**
   1. Link Supabase project and push `supabase/migrations/0001`..`0003` + run pgTAP `supabase/tests/01`..`03`.
   2. Set `apps/api` secrets via `wrangler secret put` (`COOKIE_SIGNING_SECRET`, `CSRF_SECRET`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWKS_URL`) — **never** `SUPABASE_SERVICE_ROLE_KEY`.
-  3. Set `apps/jobs` secrets (`JOBS_SUPABASE_URL`, `JOBS_SUPABASE_SERVICE_ROLE_KEY`) and deploy both Workers + `apps/web/dist` to Cloudflare Pages (`apps/web/public/_headers` applies CSP & HSTS).
+  3. Set `apps/jobs` secrets (`JOBS_SUPABASE_URL`, `JOBS_SUPABASE_SERVICE_ROLE_KEY`), build the frontend (`npm run build`), and deploy `apps/api` (serves both `/v1/*` and `[assets]` `../web/dist` at `https://financial-saas.zeeshan-m-personal.workers.dev` with `apps/web/public/_headers` CSP & HSTS) + `apps/jobs`.
