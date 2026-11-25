@@ -30,6 +30,9 @@ jobs:
       - name: Static RLS coverage check
         run: node scripts/check-rls-coverage.mjs
 
+      - name: OpenAPI 3.1 contract check
+        run: npm run openapi:generate && git diff --exit-code docs/architecture/openapi.v1.json
+
       - name: Lint
         run: npm run lint
 
