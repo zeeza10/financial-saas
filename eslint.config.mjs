@@ -24,11 +24,12 @@ export default tseslint.config(
     },
   },
   {
-    files: ['scripts/**/*.mjs', 'tests/**/*.ts'],
+    files: ['scripts/**/*.mjs', 'tests/**/*.ts', 'apps/api/src/local-server.ts'],
     languageOptions: {
       globals: {
         process: 'readonly',
         console: 'readonly',
+        Buffer: 'readonly',
       },
     },
   },

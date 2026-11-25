@@ -6,6 +6,7 @@ const PROTECTED_TEST_DIRS = [
   'packages/ledger-core',
   'tests/financial',
   'tests/security',
+  'tests/e2e',
   'supabase/tests',
 ];
 

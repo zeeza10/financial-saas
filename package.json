@@ -20,6 +20,9 @@
     "test:financial": "vitest run packages/ledger-core tests/financial",
     "test:security": "vitest run tests/security",
     "check:integrity": "node scripts/check-test-integrity.mjs",
+    "openapi:generate": "node scripts/generate-openapi.mjs",
+    "dev:api:local": "node --experimental-strip-types apps/api/src/local-server.ts",
+    "dev:web": "npm run dev --workspace=apps/web",
     "build": "npm run typecheck && npm run build --workspace=apps/web"
   },
   "devDependencies": {
