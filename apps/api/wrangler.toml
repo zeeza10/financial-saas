@@ -1,0 +1,12 @@
+name = "financial-saas-api"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+APP_ORIGIN = "http://127.0.0.1:5173"
+STORAGE_DRIVER = "r2"
+
+# Secrets (COOKIE_SIGNING_SECRET, CSRF_SECRET, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_JWKS_URL)
+# MUST be set via `wrangler secret put` or local `.dev.vars`.
+# NEVER add SUPABASE_SERVICE_ROLE_KEY to this Worker (AUTHORIZATION_RBAC_RLS.md §4).

@@ -1,0 +1,34 @@
+{
+  "name": "financial-saas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone multi-tenant double-entry Financial Management SaaS platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "modules/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -b packages/contracts packages/ledger-core packages/storage apps/api apps/jobs apps/web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:financial": "vitest run packages/ledger-core tests/financial",
+    "test:security": "vitest run tests/security",
+    "check:integrity": "node scripts/check-test-integrity.mjs",
+    "build": "npm run typecheck && npm run build --workspace=apps/web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^22.15.3",
+    "eslint": "^9.39.2",
+    "fast-check": "^3.23.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.31.1",
+    "vitest": "^3.1.2"
+  }
+}
