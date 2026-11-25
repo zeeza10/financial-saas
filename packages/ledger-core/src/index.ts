@@ -3,3 +3,4 @@ export * from './journal.js';
 export * from './fingerprint.js';
 export * from './csv.js';
 export * from './reports.js';
+export * from './pnl.js';

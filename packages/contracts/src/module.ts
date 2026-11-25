@@ -24,6 +24,7 @@ export interface PlatformContext {
     organizationId: string,
     permission: Permission
   ): Promise<{ role: OrgRole }>;
+  getUserPartyId(user: AuthUser, organizationId: string): Promise<string | null>;
   getOrganizationBaseCurrency(user: AuthUser, organizationId: string): Promise<string>;
   appendAudit(params: {
     organizationId: string;

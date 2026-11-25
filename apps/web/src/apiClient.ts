@@ -1,24 +1,45 @@
 import type {
   AccountDto,
+  AccrueSalaryRequest,
+  AllocatePaymentRequest,
+  AssetDto,
   AuditEventDto,
   BankAccountDto,
   BankTransactionDto,
   CreateAccountRequest,
+  CreateAssetRequest,
   CreateBankAccountRequest,
+  CreateInvoiceBillRequest,
   CreateJournalDraftRequest,
+  CreateLiabilityRequest,
   CreateOrganizationRequest,
+  CreatePartyRequest,
   CreatePeriodRequest,
+  CreateProfitShareAgreementRequest,
   CreateTransferRequest,
   ImportCsvTransactionsRequest,
+  IndividualLedgerDto,
+  InvestorContributionRequest,
   InviteMemberRequest,
+  InvoiceBillDto,
   JournalEntryDto,
+  LiabilityDto,
   MatchReconciliationRequest,
   MemberDto,
   OrganizationDto,
   OrgRole,
+  PartyDto,
+  PayDistributionRequest,
+  PaySalaryRunRequest,
   PeriodDto,
   PostBankTransactionRequest,
+  ProfitDistributionDto,
+  ProfitShareAgreementDto,
   ReconciliationDto,
+  RecordEbayPayoutRequest,
+  RecordExpenseRequest,
+  RunProfitDistributionRequest,
+  SalaryRunDto,
   StartReconciliationRequest,
   TrialBalanceReportDto,
 } from '@financial-saas/contracts';
@@ -425,5 +446,216 @@ export const apiClient = {
       }
     );
     return res.reconciliation;
+  },
+
+  // --- Phase 5: Business Modules ---
+  async listParties(organizationId: string): Promise<PartyDto[]> {
+    const res = await request<{ items: PartyDto[] }>('/v1/parties', { organizationId });
+    return res.items;
+  },
+
+  async createParty(organizationId: string, input: CreatePartyRequest): Promise<PartyDto> {
+    const res = await request<{ party: PartyDto }>('/v1/parties', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.party;
+  },
+
+  async getIndividualLedger(organizationId: string, partyId: string): Promise<IndividualLedgerDto> {
+    const res = await request<{ ledger: IndividualLedgerDto }>(`/v1/parties/${partyId}/ledger`, {
+      organizationId,
+    });
+    return res.ledger;
+  },
+
+  async recordExpense(organizationId: string, input: RecordExpenseRequest): Promise<void> {
+    await request('/v1/expenses', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  },
+
+  async listInvoicesBills(organizationId: string): Promise<InvoiceBillDto[]> {
+    const res = await request<{ items: InvoiceBillDto[] }>('/v1/invoices-bills', { organizationId });
+    return res.items;
+  },
+
+  async createInvoiceBill(
+    organizationId: string,
+    input: CreateInvoiceBillRequest
+  ): Promise<InvoiceBillDto> {
+    const res = await request<{ document: InvoiceBillDto }>('/v1/invoices-bills', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.document;
+  },
+
+  async allocatePayment(
+    organizationId: string,
+    docId: string,
+    input: AllocatePaymentRequest
+  ): Promise<InvoiceBillDto> {
+    const res = await request<{ document: InvoiceBillDto }>(`/v1/invoices-bills/${docId}/allocate`, {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.document;
+  },
+
+  async recordInvestorContribution(
+    organizationId: string,
+    input: InvestorContributionRequest
+  ): Promise<void> {
+    await request('/v1/investors/contributions', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+  },
+
+  async listProfitShareAgreements(organizationId: string): Promise<ProfitShareAgreementDto[]> {
+    const res = await request<{ items: ProfitShareAgreementDto[] }>('/v1/profit-sharing/agreements', {
+      organizationId,
+    });
+    return res.items;
+  },
+
+  async createProfitShareAgreement(
+    organizationId: string,
+    input: CreateProfitShareAgreementRequest
+  ): Promise<ProfitShareAgreementDto> {
+    const res = await request<{ agreement: ProfitShareAgreementDto }>(
+      '/v1/profit-sharing/agreements',
+      {
+        method: 'POST',
+        organizationId,
+        body: input,
+        idempotencyKey: crypto.randomUUID(),
+      }
+    );
+    return res.agreement;
+  },
+
+  async listProfitDistributions(organizationId: string): Promise<ProfitDistributionDto[]> {
+    const res = await request<{ items: ProfitDistributionDto[] }>(
+      '/v1/profit-sharing/distributions',
+      { organizationId }
+    );
+    return res.items;
+  },
+
+  async runProfitDistribution(
+    organizationId: string,
+    input: RunProfitDistributionRequest
+  ): Promise<ProfitDistributionDto> {
+    const res = await request<{ distribution: ProfitDistributionDto }>(
+      '/v1/profit-sharing/distributions',
+      {
+        method: 'POST',
+        organizationId,
+        body: input,
+        idempotencyKey: crypto.randomUUID(),
+      }
+    );
+    return res.distribution;
+  },
+
+  async payDistribution(
+    organizationId: string,
+    distId: string,
+    input: PayDistributionRequest
+  ): Promise<ProfitDistributionDto> {
+    const res = await request<{ distribution: ProfitDistributionDto }>(
+      `/v1/profit-sharing/distributions/${distId}/pay`,
+      {
+        method: 'POST',
+        organizationId,
+        body: input,
+        idempotencyKey: crypto.randomUUID(),
+      }
+    );
+    return res.distribution;
+  },
+
+  async listSalaryRuns(organizationId: string): Promise<SalaryRunDto[]> {
+    const res = await request<{ items: SalaryRunDto[] }>('/v1/salary-runs', { organizationId });
+    return res.items;
+  },
+
+  async accrueSalary(organizationId: string, input: AccrueSalaryRequest): Promise<SalaryRunDto> {
+    const res = await request<{ salary_run: SalaryRunDto }>('/v1/salary-runs', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.salary_run;
+  },
+
+  async paySalaryRun(
+    organizationId: string,
+    runId: string,
+    input: PaySalaryRunRequest
+  ): Promise<SalaryRunDto> {
+    const res = await request<{ salary_run: SalaryRunDto }>(`/v1/salary-runs/${runId}/pay`, {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.salary_run;
+  },
+
+  async listAssets(organizationId: string): Promise<AssetDto[]> {
+    const res = await request<{ items: AssetDto[] }>('/v1/assets', { organizationId });
+    return res.items;
+  },
+
+  async createAsset(organizationId: string, input: CreateAssetRequest): Promise<AssetDto> {
+    const res = await request<{ asset: AssetDto }>('/v1/assets', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.asset;
+  },
+
+  async listLiabilities(organizationId: string): Promise<LiabilityDto[]> {
+    const res = await request<{ items: LiabilityDto[] }>('/v1/liabilities', { organizationId });
+    return res.items;
+  },
+
+  async createLiability(
+    organizationId: string,
+    input: CreateLiabilityRequest
+  ): Promise<LiabilityDto> {
+    const res = await request<{ liability: LiabilityDto }>('/v1/liabilities', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    return res.liability;
+  },
+
+  async recordEbayPayout(organizationId: string, input: RecordEbayPayoutRequest): Promise<void> {
+    await request('/v1/ebay/payouts', {
+      method: 'POST',
+      organizationId,
+      body: input,
+      idempotencyKey: crypto.randomUUID(),
+    });
   },
 };

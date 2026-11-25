@@ -1,19 +1,33 @@
 import { Hono } from 'hono';
 import {
+  AccrueSalaryRequestSchema,
+  AllocatePaymentRequestSchema,
   CreateAccountRequestSchema,
+  CreateAssetRequestSchema,
   CreateBankAccountRequestSchema,
+  CreateCompensationArrangementRequestSchema,
+  CreateInvoiceBillRequestSchema,
   CreateJournalDraftRequestSchema,
+  CreateLiabilityRequestSchema,
   CreateOrganizationRequestSchema,
+  CreatePartyRequestSchema,
   CreatePeriodRequestSchema,
+  CreateProfitShareAgreementRequestSchema,
   CreateTransferRequestSchema,
   CursorPageQuerySchema,
   ImportCsvTransactionsRequestSchema,
+  InvestorContributionRequestSchema,
   InviteMemberRequestSchema,
   LoginRequestSchema,
   MatchReconciliationRequestSchema,
+  PayDistributionRequestSchema,
+  PaySalaryRunRequestSchema,
   PostBankTransactionRequestSchema,
+  RecordEbayPayoutRequestSchema,
+  RecordExpenseRequestSchema,
   ReopenPeriodRequestSchema,
   ReverseJournalEntryRequestSchema,
+  RunProfitDistributionRequestSchema,
   SignupRequestSchema,
   StartReconciliationRequestSchema,
   UpdateMemberRoleRequestSchema,
@@ -33,6 +47,11 @@ import {
   InMemoryBankingStore,
   SupabaseBankingStore,
 } from '@financial-saas/banking';
+import {
+  InMemoryOperationsStore,
+  OperationsModule,
+  SupabaseOperationsStore,
+} from '@financial-saas/operations';
 import type { ApiEnv } from './env.js';
 import {
   InMemoryRateLimiter,
@@ -141,23 +160,28 @@ export function createApiApp(deps: ApiDeps = {}) {
   const resolveEnv = (cEnv: ApiEnv) => (deps.getEnv ? deps.getEnv(cEnv) : cEnv);
   const inMemoryModuleCache = new WeakMap<
     DataStore,
-    { ledger: LedgerModule; banking: BankingModule }
+    { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule }
   >();
 
-  function resolveModules(env: ApiEnv, store: DataStore): { ledger: LedgerModule; banking: BankingModule } {
+  function resolveModules(
+    env: ApiEnv,
+    store: DataStore
+  ): { ledger: LedgerModule; banking: BankingModule; operations: OperationsModule } {
     if (store instanceof InMemoryDataStore) {
       let cached = inMemoryModuleCache.get(store);
       if (!cached) {
         const ledger = new LedgerModule(store, new InMemoryLedgerStore(store));
         const banking = new BankingModule(store, ledger, new InMemoryBankingStore(ledger));
-        cached = { ledger, banking };
+        const operations = new OperationsModule(store, ledger, new InMemoryOperationsStore(store));
+        cached = { ledger, banking, operations };
         inMemoryModuleCache.set(store, cached);
       }
       return cached;
     }
     const ledger = new LedgerModule(store, new SupabaseLedgerStore(env));
     const banking = new BankingModule(store, ledger, new SupabaseBankingStore(env));
-    return { ledger, banking };
+    const operations = new OperationsModule(store, ledger, new SupabaseOperationsStore(env));
+    return { ledger, banking, operations };
   }
 
   async function runIdempotent<T>(params: {
@@ -982,6 +1006,424 @@ export function createApiApp(deps: ApiDeps = {}) {
       c.get('requestId')
     );
     return c.json({ reconciliation });
+  });
+
+  // --- Phase 5: Business Modules (Parties, Expenses, AP/AR, Investors, Profit Sharing, Compensation, Assets, Liabilities, eBay) ---
+
+  app.get('/v1/parties', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listParties(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/parties', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'members:write');
+    const { rawText, data } = await parseStrictJson(c.req, CreatePartyRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/parties',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        party: await operations.createParty(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/parties/:partyId/ledger', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'organizations:read');
+    const partyId = UuidSchema.safeParse(c.req.param('partyId'));
+    if (!partyId.success) throw new ApiDomainError(404, 'Party not found');
+    const { operations } = resolveModules(env, store);
+    const ledger = await operations.getIndividualLedger(user, orgId, partyId.data);
+    return c.json({ ledger });
+  });
+
+  app.post('/v1/parties/:partyId/pseudonymize', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'members:write');
+    const partyId = UuidSchema.safeParse(c.req.param('partyId'));
+    if (!partyId.success) throw new ApiDomainError(404, 'Party not found');
+    const { operations } = resolveModules(env, store);
+    const party = await operations.pseudonymizeParty(user, orgId, partyId.data, c.get('requestId'));
+    return c.json({ party });
+  });
+
+  app.post('/v1/expenses', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, RecordExpenseRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/expenses',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        entry: await operations.recordExpense(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/invoices-bills', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listInvoicesBills(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/invoices-bills', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, CreateInvoiceBillRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/invoices-bills',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        document: await operations.createInvoiceBill(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/invoices-bills/:docId/allocate', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const docId = UuidSchema.safeParse(c.req.param('docId'));
+    if (!docId.success) throw new ApiDomainError(404, 'Invoice or bill not found');
+    const { rawText, data } = await parseStrictJson(c.req, AllocatePaymentRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/invoices-bills/${docId.data}/allocate`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 200,
+      execute: async () => ({
+        document: await operations.allocatePayment(user, orgId, docId.data, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 200);
+  });
+
+  app.post('/v1/investors/contributions', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, InvestorContributionRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/investors/contributions',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        entry: await operations.recordInvestorContribution(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/profit-sharing/agreements', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'profit_sharing:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listProfitShareAgreements(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/profit-sharing/agreements', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'profit_sharing:write');
+    const { rawText, data } = await parseStrictJson(c.req, CreateProfitShareAgreementRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/profit-sharing/agreements',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        agreement: await operations.createProfitShareAgreement(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/profit-sharing/distributions', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'profit_sharing:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listProfitDistributions(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/profit-sharing/distributions', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'profit_sharing:run');
+    const { rawText, data } = await parseStrictJson(c.req, RunProfitDistributionRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/profit-sharing/distributions',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        distribution: await operations.runProfitDistribution(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/profit-sharing/distributions/:distId/pay', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const distId = UuidSchema.safeParse(c.req.param('distId'));
+    if (!distId.success) throw new ApiDomainError(404, 'Distribution not found');
+    const { rawText, data } = await parseStrictJson(c.req, PayDistributionRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/profit-sharing/distributions/${distId.data}/pay`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 200,
+      execute: async () => ({
+        distribution: await operations.payDistribution(user, orgId, distId.data, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 200);
+  });
+
+  app.get('/v1/compensation/arrangements', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listCompensationArrangements(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/compensation/arrangements', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'members:write');
+    const { rawText, data } = await parseStrictJson(c.req, CreateCompensationArrangementRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/compensation/arrangements',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        arrangement: await operations.createCompensationArrangement(user, orgId, data),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/salary-runs', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listSalaryRuns(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/salary-runs', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, AccrueSalaryRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/salary-runs',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        salary_run: await operations.accrueSalaryRun(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/salary-runs/:runId/pay', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const runId = UuidSchema.safeParse(c.req.param('runId'));
+    if (!runId.success) throw new ApiDomainError(404, 'Salary run not found');
+    const { rawText, data } = await parseStrictJson(c.req, PaySalaryRunRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: `POST /v1/salary-runs/${runId.data}/pay`,
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 200,
+      execute: async () => ({
+        salary_run: await operations.paySalaryRun(user, orgId, runId.data, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 200);
+  });
+
+  app.get('/v1/assets', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listAssets(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/assets', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, CreateAssetRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/assets',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        asset: await operations.createAsset(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.get('/v1/liabilities', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'reports:read');
+    const { operations } = resolveModules(env, store);
+    const items = await operations.listLiabilities(user, orgId);
+    return c.json({ items });
+  });
+
+  app.post('/v1/liabilities', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, CreateLiabilityRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/liabilities',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: async () => ({
+        liability: await operations.createLiability(user, orgId, data, c.get('requestId')),
+      }),
+    });
+    return c.json(res.body, res.statusCode as 201);
+  });
+
+  app.post('/v1/ebay/payouts', async (c) => {
+    const env = resolveEnv(c.env);
+    const user = await requireSession(c);
+    const store = deps.createStore ? deps.createStore(env) : new SupabaseRpcStore(env);
+    const orgId = await requireOrgPermission(c, store, user, 'ledger:post');
+    const { rawText, data } = await parseStrictJson(c.req, RecordEbayPayoutRequestSchema);
+    const { operations } = resolveModules(env, store);
+    const res = await runIdempotent({
+      store,
+      user,
+      organizationId: orgId,
+      route: 'POST /v1/ebay/payouts',
+      idempotencyKey: c.req.header('idempotency-key'),
+      rawBody: rawText,
+      statusCode: 201,
+      execute: () => operations.recordEbayPayout(user, orgId, data, c.get('requestId')),
+    });
+    return c.json(res.body, res.statusCode as 201);
   });
 
   return app;
