@@ -4,8 +4,10 @@ import type {
   AllocatePaymentRequest,
   AssetDto,
   AuditEventDto,
+  BalanceSheetReportDto,
   BankAccountDto,
   BankTransactionDto,
+  CashFlowReportDto,
   CreateAccountRequest,
   CreateAssetRequest,
   CreateBankAccountRequest,
@@ -17,6 +19,7 @@ import type {
   CreatePeriodRequest,
   CreateProfitShareAgreementRequest,
   CreateTransferRequest,
+  DashboardSummaryDto,
   ImportCsvTransactionsRequest,
   IndividualLedgerDto,
   InvestorContributionRequest,
@@ -43,6 +46,7 @@ import type {
   StartReconciliationRequest,
   TrialBalanceReportDto,
 } from '@financial-saas/contracts';
+import type { ProfitAndLossSummary } from '@financial-saas/ledger-core';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -657,5 +661,87 @@ export const apiClient = {
       body: input,
       idempotencyKey: crypto.randomUUID(),
     });
+  },
+
+  // --- Phase 6: Dashboard & Statements ---
+  async getDashboard(
+    organizationId: string,
+    params: { startDate: string; endDate: string; accountId?: string; partyId?: string }
+  ): Promise<DashboardSummaryDto> {
+    const q = new URLSearchParams({
+      start_date: params.startDate,
+      end_date: params.endDate,
+    });
+    if (params.accountId) q.set('account_id', params.accountId);
+    if (params.partyId) q.set('party_id', params.partyId);
+    const res = await request<{ summary: DashboardSummaryDto }>(`/v1/dashboard?${q.toString()}`, {
+      organizationId,
+    });
+    return res.summary;
+  },
+
+  async getProfitAndLoss(
+    organizationId: string,
+    params: { startDate: string; endDate: string; accountId?: string; partyId?: string }
+  ): Promise<ProfitAndLossSummary> {
+    const q = new URLSearchParams({
+      start_date: params.startDate,
+      end_date: params.endDate,
+    });
+    if (params.accountId) q.set('account_id', params.accountId);
+    if (params.partyId) q.set('party_id', params.partyId);
+    const res = await request<{ report: ProfitAndLossSummary }>(`/v1/reports/pnl?${q.toString()}`, {
+      organizationId,
+    });
+    return res.report;
+  },
+
+  async getBalanceSheet(organizationId: string, asOfDate: string): Promise<BalanceSheetReportDto> {
+    const res = await request<{ report: BalanceSheetReportDto }>(
+      `/v1/reports/balance-sheet?as_of_date=${encodeURIComponent(asOfDate)}`,
+      { organizationId }
+    );
+    return res.report;
+  },
+
+  async getCashFlow(
+    organizationId: string,
+    params: { startDate: string; endDate: string }
+  ): Promise<CashFlowReportDto> {
+    const q = new URLSearchParams({ start_date: params.startDate, end_date: params.endDate });
+    const res = await request<{ report: CashFlowReportDto }>(
+      `/v1/reports/cash-flow?${q.toString()}`,
+      { organizationId }
+    );
+    return res.report;
+  },
+
+  async downloadExport(
+    organizationId: string,
+    params: {
+      report: 'pnl' | 'balance-sheet' | 'trial-balance' | 'cash-flow' | 'expenses';
+      format: 'csv' | 'xlsx' | 'pdf';
+      startDate: string;
+      endDate: string;
+    }
+  ): Promise<{ blob: Blob; filename: string }> {
+    const q = new URLSearchParams({
+      report: params.report,
+      format: params.format,
+      start_date: params.startDate,
+      end_date: params.endDate,
+    });
+    const res = await fetch(`${API_BASE}/v1/reports/export?${q.toString()}`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'X-Organization-Id': organizationId },
+    });
+    if (!res.ok) {
+      throw new ApiClientError(res.status, `Export failed (${res.status})`);
+    }
+    const cd = res.headers.get('content-disposition') ?? '';
+    const match = /filename="([^"]+)"/.exec(cd);
+    const filename = match?.[1] ?? `${params.report}.${params.format}`;
+    return { blob: await res.blob(), filename };
   },
 };

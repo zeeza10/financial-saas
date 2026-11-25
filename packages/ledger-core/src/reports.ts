@@ -36,6 +36,7 @@ export const DEFAULT_COA_TEMPLATE: readonly DefaultAccountTemplate[] = [
   { code: '3000', name: 'Investor Capital', account_type: 'equity', ownership_type: 'business', is_system: true },
   { code: '3100', name: 'Retained Earnings', account_type: 'equity', ownership_type: 'business', is_system: true },
   { code: '3200', name: 'Owner Draws', account_type: 'equity', ownership_type: 'business', is_system: true },
+  { code: '3900', name: 'Personal Funds / Offset (Excluded)', account_type: 'equity', ownership_type: 'personal', is_system: false },
   { code: '4000', name: 'Sales Revenue', account_type: 'income', ownership_type: 'business', is_system: true },
   { code: '4050', name: 'Sales Refunds & Returns', account_type: 'income', ownership_type: 'business', is_system: true },
   { code: '4100', name: 'Shipping Income', account_type: 'income', ownership_type: 'business', is_system: false },
