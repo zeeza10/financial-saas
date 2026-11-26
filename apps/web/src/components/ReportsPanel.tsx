@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Download, FileSpreadsheet, FileText } from 'lucide-react';
 import {
   hasRolePermission,
   type BalanceSheetReportDto,
@@ -10,6 +11,7 @@ import {
 } from '@financial-saas/contracts';
 import { formatMinorUnits, money, type ProfitAndLossSummary } from '@financial-saas/ledger-core';
 import { apiClient } from '../apiClient.js';
+import { EmptyState, StatusBadge } from './ui/DesignSystem.js';
 
 interface ReportsPanelProps {
   org: OrganizationDto;
@@ -21,6 +23,7 @@ interface ReportsPanelProps {
   trialBalance: TrialBalanceReportDto | null;
   parties: PartyDto[];
   onError: (msg: string | null) => void;
+  onNotify?: (title: string, detail?: string) => void;
 }
 
 type StatementView = 'pnl' | 'balance-sheet' | 'cash-flow' | 'trial-balance' | 'party-ledger';
@@ -35,6 +38,7 @@ export function ReportsPanel({
   trialBalance,
   parties,
   onError,
+  onNotify,
 }: ReportsPanelProps) {
   const [view, setView] = useState<StatementView>('pnl');
   const [selectedPartyId, setSelectedPartyId] = useState('');
@@ -63,6 +67,7 @@ export function ReportsPanel({
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      onNotify?.('Statement exported', filename);
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Export failed');
     }
@@ -82,49 +87,64 @@ export function ReportsPanel({
   }
 
   return (
-    <>
-      <section className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {(
-              [
-                ['pnl', 'Profit & Loss'],
-                ['balance-sheet', 'Balance Sheet'],
-                ['cash-flow', 'Cash Flow'],
-                ['trial-balance', 'Trial Balance'],
-                ['party-ledger', 'Individual Ledgers'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={`btn ${view === id ? '' : 'btn-secondary'}`}
-                onClick={() => setView(id)}
-              >
-                {label}
-              </button>
-            ))}
+    <div className="lc-stack-lg">
+      <section className="lc-card">
+        <div className="lc-page-head">
+          <div>
+            <div className="lc-eyebrow">Audit-Ready Statements · {startDate} → {endDate}</div>
+            <h1 className="lc-page-title">Financial Statements &amp; Exports</h1>
+            <p className="muted" style={{ margin: '0.2rem 0 0' }}>
+              Accrual P&amp;L, Balance Sheet, Cash Flow, Trial Balance, and Individual Counterparty Ledgers (`BR-017`).
+            </p>
           </div>
-
           {canExport && view !== 'party-ledger' && (
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => handleExport(view, 'csv')}>
-                Export CSV
+            <div className="lc-btn-group">
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleExport(view, 'csv')}>
+                <Download size={14} /> CSV
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => handleExport(view, 'xlsx')}>
-                Export Excel (.xlsx)
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleExport(view, 'xlsx')}>
+                <FileSpreadsheet size={14} /> Excel (.xlsx)
               </button>
-              <button type="button" className="btn btn-secondary" onClick={() => handleExport(view, 'pdf')}>
-                Export PDF
+              <button type="button" className="btn btn-sm" onClick={() => handleExport(view, 'pdf')}>
+                <FileText size={14} /> PDF Statement
               </button>
             </div>
           )}
         </div>
+
+        <div className="lc-segmented" style={{ marginTop: '0.9rem' }} role="tablist" aria-label="Financial statement selector">
+          {(
+            [
+              ['pnl', 'Profit & Loss'],
+              ['balance-sheet', 'Balance Sheet'],
+              ['cash-flow', 'Cash Flow'],
+              ['trial-balance', 'Trial Balance'],
+              ['party-ledger', 'Individual Ledgers'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`lc-seg-btn ${view === id ? 'active' : ''}`}
+              onClick={() => setView(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </section>
 
       {view === 'pnl' && pnl && (
-        <section className="card">
-          <h2 style={{ marginTop: 0 }}>Profit & Loss ({pnl.start_date} to {pnl.end_date})</h2>
+        <section className="lc-card">
+          <header className="lc-card-head">
+            <div>
+              <h3 className="lc-card-title">Profit &amp; Loss Statement (Accrual)</h3>
+              <p className="lc-card-sub">{pnl.start_date} to {pnl.end_date}</p>
+            </div>
+            <StatusBadge tone={BigInt(pnl.net_profit_minor) >= 0n ? 'success' : 'warning'}>
+              Net Profit: {fmt(pnl.net_profit_minor)}
+            </StatusBadge>
+          </header>
           <div className="table-wrap">
             <table>
               <thead>
@@ -132,7 +152,7 @@ export function ReportsPanel({
                   <th>Code</th>
                   <th>Account</th>
                   <th>Category</th>
-                  <th>Amount</th>
+                  <th className="num-col">Amount</th>
                 </tr>
               </thead>
               <tbody>
@@ -140,21 +160,21 @@ export function ReportsPanel({
                   <tr key={l.account_id}>
                     <td className="mono">{l.code}</td>
                     <td>{l.name}</td>
-                    <td>{l.account_type}</td>
-                    <td>{fmt(l.net_minor)}</td>
+                    <td style={{ textTransform: 'capitalize' }}>{l.account_type}</td>
+                    <td className="num-col mono-num">{fmt(l.net_minor)}</td>
                   </tr>
                 ))}
-                <tr>
+                <tr className="lc-subtotal-row">
                   <td colSpan={3}><strong>Total Income</strong></td>
-                  <td><strong>{fmt(pnl.total_income_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(pnl.total_income_minor)}</strong></td>
                 </tr>
-                <tr>
+                <tr className="lc-subtotal-row">
                   <td colSpan={3}><strong>Total Expenses</strong></td>
-                  <td><strong>{fmt(pnl.total_expense_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(pnl.total_expense_minor)}</strong></td>
                 </tr>
-                <tr>
+                <tr className="lc-total-row">
                   <td colSpan={3}><strong>Net Profit (Accrual)</strong></td>
-                  <td><strong>{fmt(pnl.net_profit_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(pnl.net_profit_minor)}</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -163,21 +183,24 @@ export function ReportsPanel({
       )}
 
       {view === 'balance-sheet' && balanceSheet && (
-        <section className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0 }}>Balance Sheet (as of {balanceSheet.as_of_date})</h2>
-            <span className={`badge ${balanceSheet.is_balanced ? 'badge-ok' : 'badge-warn'}`}>
+        <section className="lc-card">
+          <header className="lc-card-head">
+            <div>
+              <h3 className="lc-card-title">Balance Sheet</h3>
+              <p className="lc-card-sub">As of {balanceSheet.as_of_date}</p>
+            </div>
+            <StatusBadge tone={balanceSheet.is_balanced ? 'success' : 'danger'}>
               {balanceSheet.is_balanced ? 'Assets = Liabilities + Equity' : 'OUT OF BALANCE'}
-            </span>
-          </div>
-          <div className="table-wrap" style={{ marginTop: '0.75rem' }}>
+            </StatusBadge>
+          </header>
+          <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Code</th>
                   <th>Account</th>
                   <th>Section</th>
-                  <th>Balance</th>
+                  <th className="num-col">Balance</th>
                 </tr>
               </thead>
               <tbody>
@@ -186,42 +209,42 @@ export function ReportsPanel({
                     <td className="mono">{a.code}</td>
                     <td>{a.name}</td>
                     <td>Asset</td>
-                    <td>{fmt(a.balance_minor)}</td>
+                    <td className="num-col mono-num">{fmt(a.balance_minor)}</td>
                   </tr>
                 ))}
-                <tr>
+                <tr className="lc-subtotal-row">
                   <td colSpan={3}><strong>Total Assets</strong></td>
-                  <td><strong>{fmt(balanceSheet.total_assets_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(balanceSheet.total_assets_minor)}</strong></td>
                 </tr>
                 {balanceSheet.liabilities.map((l) => (
                   <tr key={l.account_id}>
                     <td className="mono">{l.code}</td>
                     <td>{l.name}</td>
                     <td>Liability</td>
-                    <td>{fmt(l.balance_minor)}</td>
+                    <td className="num-col mono-num">{fmt(l.balance_minor)}</td>
                   </tr>
                 ))}
-                <tr>
+                <tr className="lc-subtotal-row">
                   <td colSpan={3}><strong>Total Liabilities</strong></td>
-                  <td><strong>{fmt(balanceSheet.total_liabilities_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(balanceSheet.total_liabilities_minor)}</strong></td>
                 </tr>
                 {balanceSheet.equity.map((e) => (
                   <tr key={e.account_id}>
                     <td className="mono">{e.code}</td>
                     <td>{e.name}</td>
                     <td>Equity</td>
-                    <td>{fmt(e.balance_minor)}</td>
+                    <td className="num-col mono-num">{fmt(e.balance_minor)}</td>
                   </tr>
                 ))}
                 <tr>
                   <td className="mono">—</td>
                   <td>Current Period Net Income</td>
                   <td>Equity</td>
-                  <td>{fmt(balanceSheet.current_net_income_minor)}</td>
+                  <td className="num-col mono-num">{fmt(balanceSheet.current_net_income_minor)}</td>
                 </tr>
-                <tr>
+                <tr className="lc-total-row">
                   <td colSpan={3}><strong>Total Equity</strong></td>
-                  <td><strong>{fmt(balanceSheet.total_equity_minor)}</strong></td>
+                  <td className="num-col mono-num"><strong>{fmt(balanceSheet.total_equity_minor)}</strong></td>
                 </tr>
               </tbody>
             </table>
@@ -230,20 +253,22 @@ export function ReportsPanel({
       )}
 
       {view === 'cash-flow' && cashFlow && (
-        <section className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0 }}>Cash Flow Statement ({cashFlow.start_date} to {cashFlow.end_date})</h2>
-            <span className={`badge ${cashFlow.is_reconciled ? 'badge-ok' : 'badge-warn'}`}>
+        <section className="lc-card">
+          <header className="lc-card-head">
+            <div>
+              <h3 className="lc-card-title">Cash Flow Statement</h3>
+              <p className="lc-card-sub">{cashFlow.start_date} to {cashFlow.end_date}</p>
+            </div>
+            <StatusBadge tone={cashFlow.is_reconciled ? 'success' : 'danger'}>
               {cashFlow.is_reconciled ? 'Opening + Net = Closing' : 'UNRECONCILED'}
-            </span>
-          </div>
-          <div className="grid-3" style={{ margin: '1rem 0' }}>
-            <div><div className="muted">Opening Cash</div><strong>{fmt(cashFlow.opening_cash_minor)}</strong></div>
-            <div><div className="muted">Operating Cash Flow</div><strong>{fmt(cashFlow.operating_minor)}</strong></div>
-            <div><div className="muted">Investing Cash Flow</div><strong>{fmt(cashFlow.investing_minor)}</strong></div>
-            <div><div className="muted">Financing Cash Flow</div><strong>{fmt(cashFlow.financing_minor)}</strong></div>
-            <div><div className="muted">Net Cash Change</div><strong>{fmt(cashFlow.net_cash_change_minor)}</strong></div>
-            <div><div className="muted">Closing Cash</div><strong>{fmt(cashFlow.closing_cash_minor)}</strong></div>
+            </StatusBadge>
+          </header>
+          <div className="lc-position-strip" style={{ marginBottom: '1rem' }}>
+            <div className="lc-strip-item"><span className="muted">Opening Cash</span><strong className="mono-num">{fmt(cashFlow.opening_cash_minor)}</strong></div>
+            <div className="lc-strip-item"><span className="muted">Operating</span><strong className="mono-num">{fmt(cashFlow.operating_minor)}</strong></div>
+            <div className="lc-strip-item"><span className="muted">Investing</span><strong className="mono-num">{fmt(cashFlow.investing_minor)}</strong></div>
+            <div className="lc-strip-item"><span className="muted">Financing</span><strong className="mono-num">{fmt(cashFlow.financing_minor)}</strong></div>
+            <div className="lc-strip-item"><span className="muted">Closing Cash</span><strong className="mono-num">{fmt(cashFlow.closing_cash_minor)}</strong></div>
           </div>
           <div className="table-wrap">
             <table>
@@ -251,15 +276,15 @@ export function ReportsPanel({
                 <tr>
                   <th>Activity</th>
                   <th>Counterparty / Category</th>
-                  <th>Cash Impact</th>
+                  <th className="num-col">Cash Impact</th>
                 </tr>
               </thead>
               <tbody>
                 {cashFlow.items.map((item, idx) => (
                   <tr key={`${item.activity}-${idx}`}>
-                    <td><span className="badge">{item.activity}</span></td>
+                    <td><StatusBadge tone="neutral">{item.activity}</StatusBadge></td>
                     <td>{item.label}</td>
-                    <td>{fmt(item.amount_minor)}</td>
+                    <td className="num-col mono-num">{fmt(item.amount_minor)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -269,16 +294,24 @@ export function ReportsPanel({
       )}
 
       {view === 'trial-balance' && trialBalance && (
-        <section className="card">
-          <h2 style={{ marginTop: 0 }}>Trial Balance (as of {trialBalance.as_of_date})</h2>
+        <section className="lc-card">
+          <header className="lc-card-head">
+            <div>
+              <h3 className="lc-card-title">Trial Balance</h3>
+              <p className="lc-card-sub">As of {trialBalance.as_of_date}</p>
+            </div>
+            <StatusBadge tone={trialBalance.is_balanced ? 'success' : 'danger'}>
+              {trialBalance.is_balanced ? 'Balanced' : 'Out of Balance'}
+            </StatusBadge>
+          </header>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Code</th>
                   <th>Account</th>
-                  <th>Debits</th>
-                  <th>Credits</th>
+                  <th className="num-col">Debits</th>
+                  <th className="num-col">Credits</th>
                 </tr>
               </thead>
               <tbody>
@@ -286,8 +319,8 @@ export function ReportsPanel({
                   <tr key={r.account_id}>
                     <td className="mono">{r.code}</td>
                     <td>{r.name}</td>
-                    <td>{fmt(r.debit_total_minor)}</td>
-                    <td>{fmt(r.credit_total_minor)}</td>
+                    <td className="num-col mono-num">{fmt(r.debit_total_minor)}</td>
+                    <td className="num-col mono-num">{fmt(r.credit_total_minor)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -297,12 +330,17 @@ export function ReportsPanel({
       )}
 
       {view === 'party-ledger' && (
-        <section className="card">
-          <h2 style={{ marginTop: 0 }}>Individual / Investor / Employee / Supplier Ledger (BR-017)</h2>
+        <section className="lc-card">
+          <header className="lc-card-head">
+            <div>
+              <h3 className="lc-card-title">Individual / Investor / Employee / Supplier Ledger (BR-017)</h3>
+              <p className="lc-card-sub">Inspect every debit and credit linked to a specific person or counterparty.</p>
+            </div>
+          </header>
           <label style={{ maxWidth: '380px', marginBottom: '1rem' }}>
             Select Person or Counterparty
             <select value={selectedPartyId} onChange={(e) => void handleLoadPartyLedger(e.target.value)}>
-              <option value="">Choose party...</option>
+              <option value="">Choose party…</option>
               {parties.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.display_name} ({p.party_type})
@@ -311,12 +349,17 @@ export function ReportsPanel({
             </select>
           </label>
 
-          {partyLedger && (
+          {!partyLedger ? (
+            <EmptyState
+              title="Select a person or counterparty"
+              description="Choose any supplier, customer, investor, employee, or manager to inspect their complete running ledger."
+            />
+          ) : (
             <>
-              <div className="grid-3" style={{ marginBottom: '1rem' }}>
-                <div><div className="muted">Total Debits</div><strong>{fmt(partyLedger.total_debits_minor)}</strong></div>
-                <div><div className="muted">Total Credits</div><strong>{fmt(partyLedger.total_credits_minor)}</strong></div>
-                <div><div className="muted">Net Balance</div><strong>{fmt(partyLedger.net_balance_minor)}</strong></div>
+              <div className="lc-position-strip" style={{ marginBottom: '1rem' }}>
+                <div className="lc-strip-item"><span className="muted">Total Debits</span><strong className="mono-num">{fmt(partyLedger.total_debits_minor)}</strong></div>
+                <div className="lc-strip-item"><span className="muted">Total Credits</span><strong className="mono-num">{fmt(partyLedger.total_credits_minor)}</strong></div>
+                <div className="lc-strip-item"><span className="muted">Net Balance</span><strong className="mono-num">{fmt(partyLedger.net_balance_minor)}</strong></div>
               </div>
               <div className="table-wrap">
                 <table>
@@ -326,7 +369,7 @@ export function ReportsPanel({
                       <th>Date</th>
                       <th>Description</th>
                       <th>Side</th>
-                      <th>Amount</th>
+                      <th className="num-col">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -335,8 +378,8 @@ export function ReportsPanel({
                         <td className="mono">{l.entry_no ? `#${l.entry_no}` : '—'}</td>
                         <td>{l.entry_date}</td>
                         <td>{l.description}</td>
-                        <td>{l.side.toUpperCase()}</td>
-                        <td>{fmt(l.amount_minor)}</td>
+                        <td><StatusBadge tone={l.side === 'debit' ? 'accent' : 'neutral'}>{l.side.toUpperCase()}</StatusBadge></td>
+                        <td className="num-col mono-num">{fmt(l.amount_minor)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -346,6 +389,6 @@ export function ReportsPanel({
           )}
         </section>
       )}
-    </>
+    </div>
   );
 }
