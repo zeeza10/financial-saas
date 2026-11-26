@@ -110,6 +110,12 @@ export class SupabaseAuthGateway implements AuthGateway {
       }),
     });
     if (!res.ok) {
+      if (res.status === 429) {
+        throw new ApiDomainError(
+          429,
+          'Signup email rate limit exceeded; confirm a user in Supabase Dashboard or try later'
+        );
+      }
       throw new ApiDomainError(400, 'Unable to register account');
     }
   }

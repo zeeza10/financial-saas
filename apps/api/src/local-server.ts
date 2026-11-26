@@ -1,9 +1,15 @@
 import http from 'node:http';
+import { Hono } from 'hono';
 import { SignJWT } from 'jose';
+import type { AccountDto, JournalEntryDto, OrganizationDto } from '@financial-saas/contracts';
 import { createApiApp, type AuthGateway } from './app.js';
 import type { ApiEnv } from './env.js';
 import { InMemoryRateLimiter } from './security.js';
 import { ApiDomainError, InMemoryDataStore } from './store.js';
+
+const DEMO_EMAIL = 'demo@ledgercore.local';
+const DEMO_PASSWORD = 'DemoLocalOwner#2026';
+const DEMO_NAME = 'Demo Business Owner';
 
 class LocalDevAuthGateway implements AuthGateway {
   private readonly users = new Map<string, { id: string; email: string; password: string }>();
@@ -72,9 +78,145 @@ export function buildLocalEnvFromProcess(
   return { env, localDevMode };
 }
 
+async function seedDemoWorkspaceData(
+  coreApp: ReturnType<typeof createApiApp>,
+  env: ApiEnv
+): Promise<void> {
+  const call = (path: string, init?: RequestInit) =>
+    coreApp.fetch(new Request(`http://127.0.0.1:8787${path}`, init), env);
+
+  await call('/v1/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: env.APP_ORIGIN },
+    body: JSON.stringify({
+      email: DEMO_EMAIL,
+      password: DEMO_PASSWORD,
+      display_name: DEMO_NAME,
+    }),
+  });
+
+  const loginRes = await call('/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: env.APP_ORIGIN },
+    body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
+  });
+  if (!loginRes.ok) return;
+
+  const cookie = loginRes.headers
+    .getSetCookie()
+    .map((c) => c.split(';')[0]!)
+    .join('; ');
+  const { csrf_token: csrf } = (await loginRes.json()) as { csrf_token: string };
+
+  const orgRes = await call('/v1/organizations', {
+    method: 'POST',
+    headers: {
+      Cookie: cookie,
+      Origin: env.APP_ORIGIN,
+      'X-CSRF-Token': csrf,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'local-demo-org-1',
+    },
+    body: JSON.stringify({
+      name: 'Demo eBay & Trading LLC',
+      base_currency: 'USD',
+      country: 'US',
+      fiscal_year_start_month: 1,
+    }),
+  });
+  if (!orgRes.ok) return;
+  const { organization: org } = (await orgRes.json()) as { organization: OrganizationDto };
+
+  const orgHeaders = {
+    Cookie: cookie,
+    Origin: env.APP_ORIGIN,
+    'X-CSRF-Token': csrf,
+    'X-Organization-Id': org.id,
+    'Content-Type': 'application/json',
+  };
+
+  const seedRes = await call('/v1/accounts/seed-template', {
+    method: 'POST',
+    headers: { ...orgHeaders, 'Idempotency-Key': 'local-demo-coa-1' },
+    body: '{}',
+  });
+  if (!seedRes.ok) return;
+  const { items: accounts } = (await seedRes.json()) as { items: AccountDto[] };
+  const coa = (code: string) => accounts.find((a) => a.code === code);
+
+  const bankAcc = coa('1000');
+  const capAcc = coa('3000');
+  const salesAcc = coa('4000');
+  const cogsAcc = coa('5000');
+  const feeAcc = coa('5100');
+  if (!bankAcc || !capAcc || !salesAcc || !cogsAcc || !feeAcc) return;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const year = today.slice(0, 4);
+
+  await call('/v1/periods', {
+    method: 'POST',
+    headers: { ...orgHeaders, 'Idempotency-Key': 'local-demo-period-1' },
+    body: JSON.stringify({
+      name: `FY ${year}`,
+      start_date: `${year}-01-01`,
+      end_date: `${year}-12-31`,
+    }),
+  });
+
+  await call('/v1/bank-accounts', {
+    method: 'POST',
+    headers: { ...orgHeaders, 'Idempotency-Key': 'local-demo-bank-1' },
+    body: JSON.stringify({
+      account_id: bankAcc.id,
+      institution: 'Mercury Business Checking',
+      last4: '4821',
+      ownership_type: 'business',
+      opening_balance_minor: '0',
+      currency: 'USD',
+    }),
+  });
+
+  const postEntry = async (
+    key: string,
+    description: string,
+    lines: Array<{ account_id: string; side: 'debit' | 'credit'; amount_minor: string; currency: string }>
+  ) => {
+    const draftRes = await call('/v1/journal-entries', {
+      method: 'POST',
+      headers: { ...orgHeaders, 'Idempotency-Key': `${key}-draft` },
+      body: JSON.stringify({ entry_date: today, description, lines }),
+    });
+    if (!draftRes.ok) return;
+    const { entry } = (await draftRes.json()) as { entry: JournalEntryDto };
+    await call(`/v1/journal-entries/${entry.id}/post`, {
+      method: 'POST',
+      headers: { ...orgHeaders, 'Idempotency-Key': `${key}-post` },
+      body: '{}',
+    });
+  };
+
+  await postEntry('local-demo-je-1', 'Initial founder & investor capital deposit', [
+    { account_id: bankAcc.id, side: 'debit', amount_minor: '5000000', currency: 'USD' },
+    { account_id: capAcc.id, side: 'credit', amount_minor: '5000000', currency: 'USD' },
+  ]);
+
+  await postEntry('local-demo-je-2', 'Weekly eBay storefront settlements', [
+    { account_id: bankAcc.id, side: 'debit', amount_minor: '1850000', currency: 'USD' },
+    { account_id: salesAcc.id, side: 'credit', amount_minor: '1850000', currency: 'USD' },
+  ]);
+
+  await postEntry('local-demo-je-3', 'Inventory COGS & marketplace fees', [
+    { account_id: cogsAcc.id, side: 'debit', amount_minor: '640000', currency: 'USD' },
+    { account_id: feeAcc.id, side: 'debit', amount_minor: '185000', currency: 'USD' },
+    { account_id: bankAcc.id, side: 'credit', amount_minor: '825000', currency: 'USD' },
+  ]);
+}
+
 export function createLocalApiApp(options?: {
   localDevMode?: boolean;
   appOrigin?: string;
+  seedDemoWorkspace?: boolean;
 }) {
   if (options?.localDevMode && process.env['NODE_ENV'] === 'production') {
     throw new Error('LOCAL_DEV_MODE cannot be enabled when NODE_ENV=production');
@@ -91,12 +233,55 @@ export function createLocalApiApp(options?: {
       ? new LocalDevAuthGateway(env.TEST_JWT_SECRET)
       : undefined;
 
-  const app = createApiApp({
+  const coreApp = createApiApp({
     getEnv: () => env,
     ...(store ? { createStore: () => store } : {}),
     ...(authGateway ? { createAuthGateway: () => authGateway } : {}),
     rateLimiter: new InMemoryRateLimiter(),
   });
+
+  if (!useLocalMode || process.env['NODE_ENV'] === 'production') {
+    return { app: coreApp, env };
+  }
+
+  let seedPromise: Promise<void> | null = null;
+  const ensureSeeded = () => {
+    if (!seedPromise) {
+      seedPromise = options?.seedDemoWorkspace
+        ? seedDemoWorkspaceData(coreApp, env)
+        : Promise.resolve();
+    }
+    return seedPromise;
+  };
+  if (options?.seedDemoWorkspace) {
+    void ensureSeeded();
+  }
+
+  const app = new Hono<{ Bindings: ApiEnv }>();
+
+  app.post('/v1/dev/auto-login', async (c) => {
+    const origin = c.req.header('origin');
+    if (origin && origin !== env.APP_ORIGIN) {
+      return c.json({ type: 'about:blank', title: 'Invalid origin', status: 403 }, 403);
+    }
+    await ensureSeeded();
+    if (!options?.seedDemoWorkspace) {
+      return c.json({ type: 'about:blank', title: 'Not enabled', status: 404 }, 404);
+    }
+    return coreApp.fetch(
+      new Request('http://127.0.0.1:8787/v1/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: env.APP_ORIGIN,
+        },
+        body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
+      }),
+      env
+    );
+  });
+
+  app.all('*', (c) => coreApp.fetch(c.req.raw, c.env ?? env));
 
   return { app, env };
 }
@@ -106,6 +291,7 @@ export async function startLocalApiServer(options?: {
   host?: string;
   localDevMode?: boolean;
   appOrigin?: string;
+  seedDemoWorkspace?: boolean;
 }): Promise<{ server: http.Server; url: string; close: () => Promise<void> }> {
   const { app, env } = createLocalApiApp(options);
 

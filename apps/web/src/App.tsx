@@ -65,6 +65,7 @@ type ActiveTab =
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [devAutoLoginAvailable, setDevAutoLoginAvailable] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -74,7 +75,7 @@ export function App() {
 
   const [orgs, setOrgs] = useState<OrganizationDto[]>([]);
   const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
-  const [tab, setTab] = useState<ActiveTab>('overview');
+  const [tab, setTab] = useState<ActiveTab>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Create org form
@@ -123,6 +124,12 @@ export function App() {
         const session = await apiClient.getSession();
         if (session?.authenticated) {
           setUser(session.user);
+        } else {
+          const devUser = await apiClient.tryDevAutoLogin();
+          if (devUser) {
+            setDevAutoLoginAvailable(true);
+            setUser(devUser);
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unable to check session');
@@ -336,7 +343,7 @@ export function App() {
               {authMode === 'login' ? 'Sign in' : 'Create account'}
             </button>
           </form>
-          <div style={{ marginTop: '1rem' }}>
+          <div style={{ marginTop: '1rem', display: 'grid', gap: '0.5rem' }}>
             <button
               type="button"
               className="btn btn-secondary"
@@ -345,6 +352,20 @@ export function App() {
             >
               {authMode === 'login' ? 'Need an account? Sign up' : 'Back to sign in'}
             </button>
+            {devAutoLoginAvailable && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ width: '100%' }}
+                onClick={() => {
+                  void apiClient.tryDevAutoLogin().then((devUser) => {
+                    if (devUser) setUser(devUser);
+                  });
+                }}
+              >
+                Open Demo Dashboard (Local Mode)
+              </button>
+            )}
           </div>
         </section>
       </main>

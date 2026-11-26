@@ -170,6 +170,19 @@ export const apiClient = {
     });
   },
 
+  async tryDevAutoLogin(): Promise<SessionUser | null> {
+    try {
+      const data = await request<{ user: SessionUser; csrf_token: string }>('/v1/dev/auto-login', {
+        method: 'POST',
+        body: {},
+      });
+      cachedCsrfToken = data.csrf_token;
+      return data.user;
+    } catch {
+      return null;
+    }
+  },
+
   async logout(): Promise<void> {
     await request('/v1/auth/logout', { method: 'POST', body: {} });
     cachedCsrfToken = null;

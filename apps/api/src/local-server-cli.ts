@@ -11,9 +11,10 @@ const localDevMode = process.env['LOCAL_DEV_MODE'] !== 'false';
 
 void startLocalApiServer({
   localDevMode,
+  seedDemoWorkspace: localDevMode,
 }).then(({ url }) => {
   const modeLabel = localDevMode
-    ? 'offline in-memory mode (LOCAL_DEV_MODE=true)'
+    ? 'offline in-memory mode (LOCAL_DEV_MODE=true, demo workspace seeded)'
     : `live Supabase mode (${process.env['SUPABASE_URL'] ?? 'unconfigured'})`;
   console.log(`Financial SaaS local API listening on ${url} [${modeLabel}]`);
 });
